@@ -53,3 +53,13 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Local Codex development skills
+/skills/
+
+# Optional local source references; firmware uses vendored snapshots.
+/mybot/
+/aosl/
+
+# Reference material for this port; not a build input.
+/bk7259_robot_hardware/
