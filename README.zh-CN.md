@@ -197,7 +197,7 @@ GPIO 分配以及显示、音频外设连接属于板级配置。移植到不同
 - 每个按键的 ADC 通道、电压窗口上下界和对应功能。
 
 语言选项同时决定服务区域和提示音资源目录：中文
-（`http://mybot.sh2.agoralab.co/api`）或英文（`http://mybot.sg3.agoralab.co/api`）。
+（`https://mybot.sh2.agoralab.co/api`）或英文（`https://mybot.sg3.agoralab.co/api`）。
 两个语言选项必须且只能启用一个。
 
 设备身份不由配置决定：[ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c) 在运行时

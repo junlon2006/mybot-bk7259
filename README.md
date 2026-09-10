@@ -214,7 +214,7 @@ The `MyBot BK7259 platform` Kconfig menu provides:
 - The ADC channel, both voltage window bounds, and the function of each button.
 
 The language option selects both the service region and the prompt asset directory: Chinese
-(`http://mybot.sh2.agoralab.co/api`) or English (`http://mybot.sg3.agoralab.co/api`). Exactly one
+(`https://mybot.sh2.agoralab.co/api`) or English (`https://mybot.sg3.agoralab.co/api`). Exactly one
 of the two language options must be enabled.
 
 Everything else about the device identity is fixed by the port rather than configured:
