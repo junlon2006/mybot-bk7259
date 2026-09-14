@@ -74,10 +74,12 @@ BK7259 固件采用 AP/CP 双核架构：
 - `mybot_rtsa` —— 内嵌的 Agora RTSA SDK（`include/` 头文件与
   `lib/arm/libagora-rtc-sdk.a`）。
 
-解决方案内嵌的源码快照为：mybot SDK commit `27324e7177b52ad9d8743aba31acf94d0a125f44`
-（`include/`、`platforms/`、`src/` 保持原样），以及 AOSL 基线 commit
-`84e086084ebcd0ae2455a0ce5721950c5fe2e656` 加三处已记录的 BK7259 HAL 修改。二者的版本锁
-都包含确定性源码摘要，构建过程不接受 `MYBOT_SDK_DIR` 或外部 AOSL 源码路径。
+解决方案内嵌的 mybot SDK 是上游 commit
+`db65e90ee4073bbeb4cede1ebe7132dce7773abd` 的完整源码快照，包含 RTM
+`listening/thinking/speaking` 服务端状态 LCD indicator。`SDK_REVISION` 记录其
+`include/`、`src/` 确定性聚合摘要。AOSL 基线为 commit
+`84e086084ebcd0ae2455a0ce5721950c5fe2e656`，另有三处已记录的 BK7259 HAL 修改。构建过程不接受
+`MYBOT_SDK_DIR` 或外部 AOSL 源码路径。
 
 ## 环境要求
 
@@ -235,10 +237,12 @@ EasyFlash 或 Wi-Fi 时进行。擦除会清空 EasyFlash 环境（其中保存 
 
 渲染器使用两块 246400 字节的非缓存 frame-slab 缓冲，直接调用 DSI bus、panel 和 DPU
 接口，不引入 LVGL、GPU、触摸、生成式 UI、字体或图片素材。它覆盖 mybot 的全部工作流
-界面，显示六位数字配对码，并在对话界面叠加声纹徽章。徽章使用与其余渲染相同的图元：
-一个用颜色表达注册状态的圆盘，内部是声纹波形。服务端未确认声纹时为红色，确认后转为
-绿色；绿色取自 ESP32 各板的 `RGB565(114, 255, 156)`，ESP32 原先的琥珀色因在对话界面上
-不够醒目而改用本仓通用的状态红。SDK 的 LCD init/destroy 只做产品自有显示的挂接与解挂。
+界面，显示六位数字配对码，并在对话界面显示服务端状态 indicator。`state.listening`、
+`state.thinking`、`state.speaking` 分别显示麦克风、思考圆点和扬声器波纹图标，并用不同
+颜色和标签区分；三种状态互斥。对话界面同时保留声纹徽章：一个用颜色表达注册状态的
+圆盘，内部是声纹波形。服务端未确认声纹时为红色，确认后转为绿色；绿色取自 ESP32 各板
+的 `RGB565(114, 255, 156)`，ESP32 原先的琥珀色因在对话界面上不够醒目而改用本仓通用的
+状态红。SDK 的 LCD init/destroy 只做产品自有显示的挂接与解挂。
 
 ## Wi-Fi 配网
 
@@ -277,7 +281,8 @@ python3 bk_solution_ai/projects/mybot/scripts/generate_assets_c.py \
 
 ## 源码边界
 
-- 内嵌的 mybot SDK `include/`、`platforms/`、`src/` 是只读的上游快照。
+- 内嵌的 mybot SDK `include/`、`src/` 是 `SDK_REVISION` 所列的上游完整快照；`platforms/`
+  是 BK7259 平台适配源码。
 - 内嵌的 AOSL 锁定在记录的版本，包括已声明的三处 BK7259 HAL 修改。
 - `bk_avdk_smp` 使用 `release/v4.0.1-mybot` 分支，它等于上游 `release/v4.0.1` 加上本产品
   的 SDK 侧修复 —— 目前是双核上的强制门户 DNS 服务。除此之外本移植不改动它的任何

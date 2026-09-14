@@ -84,10 +84,10 @@ remotes.
 - `mybot_rtsa` — the vendored Agora RTSA SDK (`include/` headers and
   `lib/arm/libagora-rtc-sdk.a`).
 
-The solution vendors these source snapshots: mybot SDK commit
-`27324e7177b52ad9d8743aba31acf94d0a125f44`, with `include/`, `platforms/`, and `src/` kept
-unmodified, and AOSL base commit `84e086084ebcd0ae2455a0ce5721950c5fe2e656` with three documented
-BK7259 HAL fixes. Their revision locks contain deterministic source digests, and the build has no
+The solution vendors the mybot SDK as a complete upstream snapshot at commit
+`db65e90ee4073bbeb4cede1ebe7132dce7773abd`, including the RTM server-state LCD indicators.
+`SDK_REVISION` records its deterministic `include/` and `src/` digest. AOSL is based on
+commit `84e086084ebcd0ae2455a0ce5721950c5fe2e656` with its documented BK7259 HAL fixes. The build has no
 `MYBOT_SDK_DIR` or external AOSL source-path input.
 
 ## Requirements
@@ -258,13 +258,15 @@ the GPIO7 backlight is active low.
 
 The renderer uses two 246400-byte uncached frame-slab buffers and the direct DSI bus, panel, and
 DPU APIs. It does not include LVGL, GPU, touch, generated UI, fonts, or image assets. It covers
-every mybot workflow screen, displays the six-digit numeric pairing code, and adds a voiceprint
-badge to the active-conversation screen. The badge is drawn from the same primitives as the rest of
-the renderer: a disc whose color carries the registration state, with a waveform glyph inside it.
-It is red while the server has not confirmed the voiceprint and turns green once it has. The green
-is the ESP32 boards' `RGB565(114, 255, 156)`; the ESP32 amber was replaced with the shared screen
-red because it did not stand out against the conversation screen. SDK LCD init/destroy only attach
-to and detach from the product-owned display.
+every mybot workflow screen, displays the six-digit numeric pairing code, and adds server-state
+indicators to the active-conversation screen. `state.listening`, `state.thinking`, and
+`state.speaking` render microphone, processing-dots, and speaker-wave icons with distinct colors and
+labels; the three states are mutually exclusive. The same screen retains a voiceprint badge drawn
+from the same primitives as the rest of the renderer: a disc whose color carries the registration
+state, with a waveform glyph inside it. It is red while the server has not confirmed the voiceprint
+and turns green once it has. The green is the ESP32 boards' `RGB565(114, 255, 156)`; the ESP32 amber
+was replaced with the shared screen red because it did not stand out against the conversation
+screen. SDK LCD init/destroy only attach to and detach from the product-owned display.
 
 ## Wi-Fi provisioning
 
@@ -308,7 +310,8 @@ PCM.
 
 ## Source boundaries
 
-- Vendored mybot SDK `include/`, `platforms/`, and `src/` are a read-only upstream snapshot.
+- Vendored mybot SDK `include/` and `src/` are the read-only upstream snapshot recorded in
+  `mybot_sdk/SDK_REVISION`.
 - Vendored AOSL is locked to its recorded content, including the three declared BK7259 HAL
   modifications.
 - `bk_avdk_smp` is consumed at `release/v4.0.1-mybot`, which is upstream `release/v4.0.1` plus this
