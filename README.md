@@ -85,7 +85,8 @@ remotes.
   `lib/arm/libagora-rtc-sdk.a`).
 
 The solution vendors the mybot SDK as a complete upstream snapshot at commit
-`db65e90ee4073bbeb4cede1ebe7132dce7773abd`, including the RTM server-state LCD indicators.
+`1baee9a61ddaa4c4b7b72406fa6c8a0503f4b61d`, including the RTM server-state LCD indicators and
+the optional video uplink contract (disabled in the BK7259 build).
 `SDK_REVISION` records its deterministic `include/` and `src/` digest. AOSL is based on
 commit `84e086084ebcd0ae2455a0ce5721950c5fe2e656` with its documented BK7259 HAL fixes. The build has no
 `MYBOT_SDK_DIR` or external AOSL source-path input.
