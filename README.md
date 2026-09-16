@@ -7,7 +7,7 @@
 **[简体中文](README.zh-CN.md) | English**
 
 **mybot-bk7259** is the BK7259 reference implementation of the open-source
-[mybot](https://github.com/junlon2006/mybot) AI voice conversation SDK. This repository organizes
+[mybot](https://github.com/junlon2006/mybot) AI multimodal conversation SDK. This repository organizes
 the BK7259 AP/CP SDK, the AI solution, the BK7259 platform port, and a buildable dual-core firmware
 project as pinned Git submodules. It is intended to provide reproducible builds, a practical
 platform development baseline, and a shared foundation for community collaboration.
@@ -19,10 +19,10 @@ platform development baseline, and a shared foundation for community collaborati
 
 ## Relationship to upstream mybot
 
-[mybot](https://github.com/junlon2006/mybot) is a cross-platform AI voice conversation SDK for
+[mybot](https://github.com/junlon2006/mybot) is a cross-platform AI multimodal conversation SDK for
 edge devices. Its core is written in C99, uses AOSL as its portable runtime, and obtains device
-capabilities such as Wi-Fi, persistent storage, buttons, displays, audio, and network transport
-through platform `ops` interfaces.
+capabilities such as Wi-Fi, persistent storage, buttons, displays, audio, encoded video, and network
+transport through platform `ops` interfaces.
 
 This repository does not redefine the mybot SDK. It provides the complete implementation required
 to run mybot on the BK7259 platform:
@@ -31,8 +31,9 @@ to run mybot on the BK7259 platform:
 - Wi-Fi APSTA provisioning with a captive portal, network reconnection, and credential persistence.
 - Microphone capture with on-device hardware AEC, speaker playback, volume control, and audio power
   management.
+- MIPI CSI camera capture, ISP MP scaling, hardware FLEXA H.264 encoding, and encoded video uplink.
 - Resistor-ladder button, MIPI display, EasyFlash KV, HTTPS, and device UID adapters.
-- Full-duplex AI voice sessions over Agora RTSA.
+- Full-duplex audio and uplink video for AI multimodal sessions over Agora RTSA.
 - Embedded Chinese and English OGG assets for provisioning prompts and pairing-code announcements.
 - A complete flash image and an OTA package containing both the CP and AP firmware.
 
@@ -44,17 +45,19 @@ device service compatible with the mybot protocol is required to run the complet
 ```mermaid
 flowchart LR
     user["User"] <--> device["BK7259 device"]
-    device --> platform["BK7259 platform port<br/>Wi-Fi · Audio · Key · LCD · KV · HTTPS"]
+    camera["MIPI CSI camera"] --> encoder["ISP MP<br/>HW FLEXA H.264"] --> platform
+    device --> platform["BK7259 platform port<br/>Wi-Fi · Audio · Video · Key · LCD · KV · HTTPS"]
     platform --> core["mybot SDK<br/>Provisioning · Pairing · Session state machine"]
-    core <--> rtc["Agora RTC"]
-    rtc <--> agent["Cloud AI agent<br/>ASR · LLM · TTS"]
+    core <--> rtc["Agora RTC<br/>Audio + H.264 uplink"]
+    rtc <--> agent["Cloud AI agent<br/>ASR · Visual understanding · LLM · TTS"]
 ```
 
 The BK7259 firmware uses an AP/CP dual-core architecture:
 
 - **CP** performs base system initialization and SMP startup control.
 - **AP** initializes the media service and runs the product control loop. It hosts the platform
-  adapters, device lifecycle, networking, audio, display, and RTC session.
+  adapters, device lifecycle, networking, audio, video capture and encoding, display, and RTC
+  session.
 - **Control loop** ([ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c)) selects APSTA
   provisioning or normal STA mode according to the saved Wi-Fi credentials. Once the network is
   up it starts the mybot SDK, and manages reconnection, reprovisioning, factory reset, and
@@ -84,12 +87,14 @@ remotes.
 - `mybot_rtsa` — the vendored Agora RTSA SDK (`include/` headers and
   `lib/arm/libagora-rtc-sdk.a`).
 
-The solution vendors the mybot SDK as a complete upstream snapshot at commit
-`1baee9a61ddaa4c4b7b72406fa6c8a0503f4b61d`, including the RTM server-state LCD indicators and
-the optional video uplink contract (disabled in the BK7259 build).
-`SDK_REVISION` records its deterministic `include/` and `src/` digest. AOSL is based on
-commit `84e086084ebcd0ae2455a0ce5721950c5fe2e656` with its documented BK7259 HAL fixes. The build has no
-`MYBOT_SDK_DIR` or external AOSL source-path input.
+The solution vendors the mybot SDK from upstream commit
+`1baee9a61ddaa4c4b7b72406fa6c8a0503f4b61d` plus two BK7259 target patches listed in
+`SDK_REVISION`: RTSA uses `RTC_LOG_ERROR` without replacing the product AOSL log gate, and debug
+firmware logs HTTPS request and response bodies. It includes the RTM server-state LCD indicators and
+the video uplink contract, which the current BK7259 AP build enables. `SDK_REVISION` records the
+selected commit, target patches, and deterministic `include/` and `src/` digest. AOSL is based on commit
+`84e086084ebcd0ae2455a0ce5721950c5fe2e656` with its five documented BK7259 HAL fixes. The build has
+no `MYBOT_SDK_DIR` or external AOSL source-path input.
 
 ## Requirements
 
@@ -183,7 +188,8 @@ The reference device workflow is:
 3. After the STA link obtains an IPv4 address, the portal and SoftAP stop and the device starts the
    mybot SDK for registration, pairing, and authentication.
 4. An unclaimed device displays and announces its pairing code. After the device is claimed, use the
-   conversation button to start an AI voice conversation.
+   conversation button to start an AI multimodal conversation with full-duplex audio and camera
+   video uplink.
 
 The five reference-board buttons are wired as one hardware reset and two resistor ladders read on
 ADC pads, so a button is identified by an ADC channel plus a voltage window rather than by a GPIO:
@@ -196,7 +202,8 @@ ADC pads, so a button is identified by an ADC channel plus a voltage window rath
 | S4 | 4 (GPIO28) | 500–1500 | Decrease volume | — |
 | S5 | 4 (GPIO28) | 4500–6000 | Increase volume | — |
 
-GPIO assignments and display and audio peripheral connections are board-level configuration.
+GPIO assignments and display, audio, and camera peripheral connections are board-level
+configuration.
 Porting to different BK7259 hardware requires corresponding configuration and platform changes.
 
 ## Configuration
@@ -212,6 +219,12 @@ The `MyBot BK7259 platform` Kconfig menu provides:
 
 - `CONFIG_MYBOT_LANGUAGE_ZH_CN`: Chinese service region and Chinese prompt assets.
 - `CONFIG_MYBOT_LANGUAGE_EN_US`: English service region and English prompt assets.
+- `CONFIG_MYBOT_VIDEO`: encoded H.264 video uplink; it is enabled in the current AP build.
+- `CONFIG_MYBOT_VIDEO_WIDTH` / `CONFIG_MYBOT_VIDEO_HEIGHT`: `640x480` encoded output.
+- `CONFIG_MYBOT_VIDEO_SENSOR_WIDTH` / `CONFIG_MYBOT_VIDEO_SENSOR_HEIGHT` /
+  `CONFIG_MYBOT_VIDEO_SENSOR_FPS`: `1280x720` sensor input at `5` fps.
+- `CONFIG_MYBOT_VIDEO_MIN_BPS` / `CONFIG_MYBOT_VIDEO_MAX_BPS`: encoder and RTSA bandwidth range,
+  currently `256000` to `512000` bits per second.
 - The ADC channel, both voltage window bounds, and the function of each button.
 
 The language option selects both the service region and the prompt asset directory: Chinese
@@ -269,6 +282,25 @@ and turns green once it has. The green is the ESP32 boards' `RGB565(114, 255, 15
 was replaced with the shared screen red because it did not stand out against the conversation
 screen. SDK LCD init/destroy only attach to and detach from the product-owned display.
 
+## Video uplink
+
+The current AP build provides an uplink-only H.264 path: the `1280x720` MIPI CSI sensor runs at
+`5` fps, the ISP MP path produces `640x480` NV12 frames, and the hardware FLEXA H.264 encoder sends
+complete access units through the high-quality Agora RTSA stream. The device does not receive or
+render remote video; its audio path remains full duplex.
+
+Starting mybot initializes the video context but leaves the camera and encoder off. They are powered
+and started only after RTC reports a connected session. Conversation teardown stops the video
+worker, encoder, camera, and camera rail before leaving RTC; full SDK shutdown also stops and
+destroys the source as a fallback. RTSA bandwidth-estimation callbacks update the encoder target
+bitrate, clamped to `256000`-`512000` bits per second; the initial target is `384000` bits per second.
+An RTSA key-frame request forces an IDR frame.
+
+Video frames set the RTSA `frame_rate` metadata to `0`, leaving RTSA to follow the real send
+timestamps rather than a second nominal frame-rate setting. The solution codec helper currently
+uses a GOP of 30 frames, so periodic IDR frames are about six seconds apart at 5 fps; an RTSA
+key-frame request can produce one sooner.
+
 ## Wi-Fi provisioning
 
 Wi-Fi is owned by the product layer, independently of the mybot SDK lifecycle. On boot, the
@@ -311,13 +343,14 @@ PCM.
 
 ## Source boundaries
 
-- Vendored mybot SDK `include/` and `src/` are the read-only upstream snapshot recorded in
-  `mybot_sdk/SDK_REVISION`.
-- Vendored AOSL is locked to its recorded content, including the three declared BK7259 HAL
-  modifications.
+- Vendored mybot SDK `include/` and `src/` are based on the upstream commit and include the BK7259
+  target patches recorded in `mybot_sdk/SDK_REVISION`; they are not a byte-for-byte unmodified
+  upstream snapshot.
+- Vendored AOSL is locked to its recorded base and content digest, including the five declared
+  BK7259 HAL modifications.
 - `bk_avdk_smp` is consumed at `release/v4.0.1-mybot`, which is upstream `release/v4.0.1` plus this
   product's SDK-side fixes — today the captive-portal DNS server in the DHCP component, on both
-  cores. The port adds no other tracked change to it, and mybot audio, APSTA, and display
+  cores. The port adds no other tracked change to it, and mybot audio, video, APSTA, and display
   integration use only its public component APIs.
 - BK platform sources include mybot only through `<mybot/platform/...>`.
 - `projects/mybot/ap/ap_main.c` is the sole application lifecycle consumer of the public
@@ -359,6 +392,9 @@ submodule.
 - Hardware volume and local announcements are enabled in the minimal descriptor. The volume is
   persisted in EasyFlash and the announcement assets are embedded as Ogg/Opus in
   `projects/mybot/assets/`; wake words remain disabled.
+- The encoded video path is configured for 5 fps, but its sustained frame cadence, bitrate
+  adaptation, key-frame/GOP behavior, and repeated session start/stop still require runtime
+  verification on the target camera hardware.
 - The ADC key windows are the vendor Robot V2 defaults, validated on the Robot V2 board only. Each
   press logs the channel, the measured millivolts and the window it was matched against; on a board
   revision with different divider values, calibrate the `MYBOT_KEY_S*_MV_*` values from those
@@ -367,6 +403,7 @@ submodule.
 
 ## Documentation
 
+- [BK7259 MyBot project guide](bk_solution_ai/projects/mybot/README.md)
 - [mybot project](https://github.com/junlon2006/mybot)
 - [mybot English documentation](https://github.com/junlon2006/mybot/blob/main/README.md)
 - [mybot porting guide](https://github.com/junlon2006/mybot/blob/main/docs/PORTING.md)

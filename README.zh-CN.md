@@ -6,7 +6,7 @@
 
 **简体中文 | [English](README.md)**
 
-**mybot-bk7259** 是开源 AI 语音对话 SDK
+**mybot-bk7259** 是开源 AI 多模态对话 SDK
 [mybot](https://github.com/junlon2006/mybot) 面向 BK7259 AP/CP 平台的参考实现。
 本仓库将 BK7259 双核 SDK、AI 解决方案、BK7259 平台适配和可直接构建的双核固件工程
 以 Git submodule 方式组织并固定到经过验证的版本，用于复现构建、平台开发和社区协作。
@@ -16,17 +16,18 @@
 
 ## 与上游 mybot 的关系
 
-[mybot](https://github.com/junlon2006/mybot) 是面向边缘设备的跨平台 AI 语音对话 SDK。
+[mybot](https://github.com/junlon2006/mybot) 是面向边缘设备的跨平台 AI 多模态对话 SDK。
 其核心采用 C99 编写，依赖 AOSL 提供可移植运行时，并通过平台 `ops` 接口获取 Wi-Fi、
-持久化存储、按键、显示、音频和网络传输等设备能力。
+持久化存储、按键、显示、音频、视频和网络传输等设备能力。
 
 本仓库不重新定义 mybot SDK，而是提供 BK7259 平台所需的完整实现：
 
 - BK7259 AP/CP 双核启动、内存和 Flash 分区配置。
 - Wi-Fi APSTA 配网（含强制门户）、网络重连和凭据持久化。
 - 麦克风采集（片上硬件 AEC）、扬声器播放、音量控制和音频功耗管理。
+- MIPI 摄像头采集、ISP 图像处理、硬件 FLEXA H.264 编码和 RTC 视频上行。
 - 电阻梯按键、MIPI 显示、EasyFlash KV、HTTPS 和设备 UID 适配。
-- 基于 Agora RTSA 的全双工 AI 语音会话。
+- 基于 Agora RTSA 的全双工音频和 H.264 视频上行 AI 多模态会话。
 - 内嵌中英文 OGG 资源，用于配网提示音和配对码播报。
 - 包含 CP 与 AP 固件的完整烧录镜像和 OTA 包。
 
@@ -38,17 +39,18 @@
 ```mermaid
 flowchart LR
     user["User"] <--> device["BK7259 device"]
-    device --> platform["BK7259 platform port<br/>Wi-Fi · Audio · Key · LCD · KV · HTTPS"]
+    camera["MIPI CSI camera"] --> encoder["ISP MP<br/>HW FLEXA H.264"] --> platform
+    device --> platform["BK7259 platform port<br/>Wi-Fi · Audio · Video · Key · LCD · KV · HTTPS"]
     platform --> core["mybot SDK<br/>Provisioning · Pairing · Session state machine"]
-    core <--> rtc["Agora RTC"]
-    rtc <--> agent["Cloud AI agent<br/>ASR · LLM · TTS"]
+    core <--> rtc["Agora RTC<br/>Audio + H.264 uplink"]
+    rtc <--> agent["Cloud AI agent<br/>ASR · Visual understanding · LLM · TTS"]
 ```
 
 BK7259 固件采用 AP/CP 双核架构：
 
 - **CP** 负责基础系统初始化和 SMP 启动控制。
 - **AP** 初始化媒体服务并运行产品控制循环，承载平台适配、设备生命周期、网络、音频、
-  显示和 RTC 会话。
+  视频采集与编码、显示和 RTC 会话。
 - **控制循环**（[ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c)）根据已保存的
   Wi-Fi 凭据选择 APSTA 配网还是正常 STA 模式；网络就绪后启动 mybot SDK，并负责重连、
   重新配网、恢复出厂设置和 SDK 异常退出。
@@ -74,11 +76,13 @@ BK7259 固件采用 AP/CP 双核架构：
 - `mybot_rtsa` —— 内嵌的 Agora RTSA SDK（`include/` 头文件与
   `lib/arm/libagora-rtc-sdk.a`）。
 
-解决方案内嵌的 mybot SDK 是上游 commit
-`db65e90ee4073bbeb4cede1ebe7132dce7773abd` 的完整源码快照，包含 RTM
-`listening/thinking/speaking` 服务端状态 LCD indicator。`SDK_REVISION` 记录其
-`include/`、`src/` 确定性聚合摘要。AOSL 基线为 commit
-`84e086084ebcd0ae2455a0ce5721950c5fe2e656`，另有三处已记录的 BK7259 HAL 修改。构建过程不接受
+解决方案内嵌的 mybot SDK 以上游 commit
+`1baee9a61ddaa4c4b7b72406fa6c8a0503f4b61d` 的完整源码快照为基线，包含 RTM
+`listening/thinking/speaking` 服务端状态 LCD indicator 和可选视频上行契约；BK7259 构建已启用
+视频。该快照另带两处在 `SDK_REVISION` 中明示的 BK7259 目标 patch：把 RTSA 日志级别设为
+`RTC_LOG_ERROR` 并在初始化后恢复 BK7259 的 AOSL 日志门限，以及在调试固件中打印 HTTPS 请求
+与响应 body。`SDK_REVISION` 同时记录 `include/`、`src/` 的确定性聚合摘要。AOSL 基线为 commit
+`84e086084ebcd0ae2455a0ce5721950c5fe2e656`，另有五处已记录的 BK7259 HAL 修改。构建过程不接受
 `MYBOT_SDK_DIR` 或外部 AOSL 源码路径。
 
 ## 环境要求
@@ -167,7 +171,8 @@ CP 与 AP 的独立镜像分别位于：
    自动弹出，无需手动输入地址，详见 [Wi-Fi 配网](#wi-fi-配网)。
 3. STA 链路获取到 IPv4 地址后，门户和 SoftAP 停止，设备启动 mybot SDK 完成注册、配对
    和鉴权。
-4. 未绑定的设备会显示并播报配对码；绑定完成后，用对话按键发起 AI 语音对话。
+4. 未绑定的设备会显示并播报配对码；绑定完成后，用对话按键发起带全双工音频和摄像头
+   视频上行的 AI 多模态对话。
 
 参考板共有五个按键，其中一个直接接硬件复位，另外四个构成两条电阻梯并接到 ADC 引脚，
 因此按键由「ADC 通道 + 电压窗口」而不是 GPIO 标识：
@@ -180,8 +185,8 @@ CP 与 AP 的独立镜像分别位于：
 | S4 | 4 (GPIO28) | 500–1500 | 音量减 | — |
 | S5 | 4 (GPIO28) | 4500–6000 | 音量加 | — |
 
-GPIO 分配以及显示、音频外设连接属于板级配置。移植到不同的 BK7259 硬件需要做相应的
-配置和平台改动。
+GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移植到不同的 BK7259 硬件需要做
+相应的配置和平台改动。
 
 ## 配置
 
@@ -196,6 +201,13 @@ GPIO 分配以及显示、音频外设连接属于板级配置。移植到不同
 
 - `CONFIG_MYBOT_LANGUAGE_ZH_CN`：中文服务区域与中文提示音资源。
 - `CONFIG_MYBOT_LANGUAGE_EN_US`：英文服务区域与英文提示音资源。
+- `CONFIG_MYBOT_VIDEO`：启用编码视频上行，参考固件中已设为 `y`。
+- `CONFIG_MYBOT_VIDEO_WIDTH` / `CONFIG_MYBOT_VIDEO_HEIGHT`：ISP 编码输出，参考值为
+  `640x480`。
+- `CONFIG_MYBOT_VIDEO_SENSOR_WIDTH` / `CONFIG_MYBOT_VIDEO_SENSOR_HEIGHT` /
+  `CONFIG_MYBOT_VIDEO_SENSOR_FPS`：MIPI sensor 输入，参考值为 `1280x720@5fps`。
+- `CONFIG_MYBOT_VIDEO_MIN_BPS` / `CONFIG_MYBOT_VIDEO_MAX_BPS`：H.264 码率范围，参考值为
+  `256000` 到 `512000` bit/s。
 - 每个按键的 ADC 通道、电压窗口上下界和对应功能。
 
 语言选项同时决定服务区域和提示音资源目录：中文
@@ -244,6 +256,22 @@ EasyFlash 或 Wi-Fi 时进行。擦除会清空 EasyFlash 环境（其中保存 
 的 `RGB565(114, 255, 156)`，ESP32 原先的琥珀色因在对话界面上不够醒目而改用本仓通用的
 状态红。SDK 的 LCD init/destroy 只做产品自有显示的挂接与解挂。
 
+## 视频上行
+
+当前 AP 构建提供只上行的 H.264 链路：`1280x720` MIPI CSI sensor 以 `5` fps 运行，ISP MP
+生成 `640x480` NV12 帧，硬件 FLEXA H.264 编码器通过 Agora RTSA 主视频流发送完整 access
+unit。设备不接收或渲染远端视频，音频链路仍为全双工。
+
+启动 mybot 时只初始化视频 context，摄像头和编码器保持关闭；RTC 报告会话已连接后才给相机
+上电并启动编码。结束对话时，在离开 RTC 前依次停止视频 worker、编码器、摄像头和相机电源；
+完整 SDK 关闭流程也会再次执行 stop/destroy 作为兜底。RTSA 的带宽估计回调会更新编码器目标
+码率，并钳制在 `256000` 到 `512000` bit/s，初始目标为 `384000` bit/s；RTSA 关键帧请求会
+强制生成 IDR。
+
+视频帧将 RTSA `frame_rate` 元数据设为 `0`，让 RTSA 使用真实发送时间戳，而不是引入第二个
+名义帧率。Solution codec helper 当前使用 30 帧 GOP，因此在 5 fps 下周期性 IDR 间隔约为
+6 秒；RTSA 关键帧请求可以提前生成 IDR。
+
 ## Wi-Fi 配网
 
 Wi-Fi 由产品层独立于 mybot SDK 生命周期持有。启动时固件从 EasyFlash 读取一条带版本的
@@ -281,12 +309,12 @@ python3 bk_solution_ai/projects/mybot/scripts/generate_assets_c.py \
 
 ## 源码边界
 
-- 内嵌的 mybot SDK `include/`、`src/` 是 `SDK_REVISION` 所列的上游完整快照；`platforms/`
-  是 BK7259 平台适配源码。
-- 内嵌的 AOSL 锁定在记录的版本，包括已声明的三处 BK7259 HAL 修改。
+- 内嵌的 mybot SDK `include/`、`src/` 以上游完整快照为基线，并包含 `SDK_REVISION` 明示的
+  两处 BK7259 目标 patch；`platforms/` 是 BK7259 平台适配源码。
+- 内嵌的 AOSL 锁定在记录的版本，包括已声明的五处 BK7259 HAL 修改。
 - `bk_avdk_smp` 使用 `release/v4.0.1-mybot` 分支，它等于上游 `release/v4.0.1` 加上本产品
   的 SDK 侧修复 —— 目前是双核上的强制门户 DNS 服务。除此之外本移植不改动它的任何
-  tracked 内容，mybot 的音频、配网和显示集成只使用其公开组件 API。
+  tracked 内容，mybot 的音频、视频、配网和显示集成只使用其公开组件 API。
 - BK 平台源码只通过 `<mybot/platform/...>` 引用 mybot。
 - `projects/mybot/ap/ap_main.c` 是公开 `<mybot/mybot.h>` API 的唯一应用生命周期使用者，
   也是唯一包含公开头 `<mybot/mybot_version.h>` 的产品源码。
@@ -322,6 +350,8 @@ git diff --submodule=log
   在两者中都被接受。
 - 最小描述符中已启用硬件音量和本地提示音。音量持久化在 EasyFlash，提示音资源以
   Ogg/Opus 内嵌在 `projects/mybot/assets/`；唤醒词仍关闭。
+- 编码视频链路已配置为 5 fps，但持续出帧节奏、码率自适应、关键帧/GOP 行为和重复会话
+  start/stop 仍需在目标摄像头硬件上完成运行时验证。
 - ADC 按键窗口是厂商 Robot V2 默认值，仅在 Robot V2 板子上验证过。每次按下都会打印
   通道、实测毫伏值和匹配到的窗口；若换成分压值不同的板型，可据此校准
   `MYBOT_KEY_S*_MV_*`。
@@ -329,6 +359,7 @@ git diff --submodule=log
 
 ## 文档
 
+- [BK7259 MyBot 工程说明](bk_solution_ai/projects/mybot/README_CN.md)
 - [mybot 项目](https://github.com/junlon2006/mybot)
 - [mybot 英文文档](https://github.com/junlon2006/mybot/blob/main/README.md)
 - [mybot 移植指南](https://github.com/junlon2006/mybot/blob/main/docs/PORTING.md)
