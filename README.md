@@ -272,11 +272,11 @@ the GPIO7 backlight is active low.
 
 The renderer uses two 246400-byte uncached frame-slab buffers and the direct DSI bus, panel, and
 DPU APIs. It does not include LVGL, GPU, touch, generated UI, fonts, or image assets. It covers
-every mybot workflow screen, displays the six-digit numeric pairing code, and adds server-state
-indicators to the active-conversation screen. `state.listening`, `state.thinking`, and
-`state.speaking` render microphone, processing-dots, and speaker-wave icons with distinct colors and
-labels; the three states are mutually exclusive. The same screen retains a voiceprint badge drawn
-from the same primitives as the rest of the renderer: a disc whose color carries the registration
+every mybot workflow screen and displays the six-digit numeric pairing code. The active-conversation
+screen keeps a fixed cyan ring, waveform, and `CONVERSATION` label. `state.listening`,
+`state.thinking`, and `state.speaking` appear as mutually exclusive microphone, processing-dots,
+and speaker-wave badges overlaid at the upper left in cyan, amber, and green. The upper-right
+voiceprint badge is drawn from the same primitives: a disc whose color carries the registration
 state, with a waveform glyph inside it. It is red while the server has not confirmed the voiceprint
 and turns green once it has. The green is the ESP32 boards' `RGB565(114, 255, 156)`; the ESP32 amber
 was replaced with the shared screen red because it did not stand out against the conversation
