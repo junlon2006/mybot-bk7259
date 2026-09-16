@@ -271,7 +271,9 @@ rendered as a 385x320 logical RGB565 surface. GPIO53 enables panel power, GPIO5 
 the GPIO7 backlight is active low.
 
 The renderer uses two 246400-byte uncached frame-slab buffers and the direct DSI bus, panel, and
-DPU APIs. It does not include LVGL, GPU, touch, generated UI, fonts, or image assets. It covers
+DPU APIs. It does not include LVGL, GPU, touch, generated UI, a runtime font engine, or image
+assets. A compact 4-bit antialiased uppercase-and-digit glyph subset is blended directly into
+RGB565, while 4x4 coverage sampling smooths primitive edges without another framebuffer. It covers
 every mybot workflow screen and displays the six-digit numeric pairing code. The active-conversation
 screen keeps a fixed cyan ring, waveform, and `CONVERSATION` label. `state.listening`,
 `state.thinking`, and `state.speaking` appear as mutually exclusive microphone, processing-dots,
