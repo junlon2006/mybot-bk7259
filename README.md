@@ -88,7 +88,8 @@ remotes.
   `lib/arm/libagora-rtc-sdk.a`).
 
 The solution vendors the mybot SDK from upstream commit
-`4ae239c804257f8b5c557e5879b54d9a88d80847`. This upstream snapshot already contains the
+`83fbcb0969da4c73a5912326d699f90ec634b28e` on `main` (SDK version 1.2.0). This snapshot includes
+serialized video control, deferred prompt teardown, and unified RTM-to-LCD indicators, as well as the
 `RTC_LOG_ERROR` and AOSL log-gate preservation; the remaining BK7259 target patch records debug
 HTTPS request and response body logging in `SDK_REVISION`. It includes the RTM server-state LCD
 indicators and the video uplink contract, which the current BK7259 AP build enables. `SDK_REVISION` records the
