@@ -32,7 +32,7 @@ to run mybot on the BK7259 platform:
 - Microphone capture with on-device hardware AEC, speaker playback, volume control, and audio power
   management.
 - MIPI CSI camera capture, ISP MP scaling, hardware FLEXA H.264 encoding, and encoded video uplink.
-- Resistor-ladder button, MIPI display, EasyFlash KV, HTTPS, and device UID adapters.
+- Resistor-ladder button, MIPI display, EasyFlash KV, HTTPS, and device identity adapters.
 - Full-duplex audio and uplink video for AI multimodal sessions over Agora RTSA.
 - Embedded Chinese and English OGG assets for provisioning prompts and pairing-code announcements.
 - A complete flash image and an OTA package containing both the CP and AP firmware.
@@ -88,11 +88,11 @@ remotes.
   `lib/arm/libagora-rtc-sdk.a`).
 
 The solution vendors the mybot SDK from upstream commit
-`1baee9a61ddaa4c4b7b72406fa6c8a0503f4b61d` plus two BK7259 target patches listed in
-`SDK_REVISION`: RTSA uses `RTC_LOG_ERROR` without replacing the product AOSL log gate, and debug
-firmware logs HTTPS request and response bodies. It includes the RTM server-state LCD indicators and
-the video uplink contract, which the current BK7259 AP build enables. `SDK_REVISION` records the
-selected commit, target patches, and deterministic `include/` and `src/` digest. AOSL is based on commit
+`4ae239c804257f8b5c557e5879b54d9a88d80847`. This upstream snapshot already contains the
+`RTC_LOG_ERROR` and AOSL log-gate preservation; the remaining BK7259 target patch records debug
+HTTPS request and response body logging in `SDK_REVISION`. It includes the RTM server-state LCD
+indicators and the video uplink contract, which the current BK7259 AP build enables. `SDK_REVISION` records the
+selected commit, target patch, and deterministic `include/` and `src/` digest. AOSL is based on commit
 `84e086084ebcd0ae2455a0ce5721950c5fe2e656` with its five documented BK7259 HAL fixes. The build has
 no `MYBOT_SDK_DIR` or external AOSL source-path input.
 
@@ -217,8 +217,10 @@ The primary project configuration files are:
 
 The `MyBot BK7259 platform` Kconfig menu provides:
 
-- `CONFIG_MYBOT_LANGUAGE_ZH_CN`: Chinese service region and Chinese prompt assets.
-- `CONFIG_MYBOT_LANGUAGE_EN_US`: English service region and English prompt assets.
+- `CONFIG_MYBOT_LANGUAGE_ZH_CN`: Chinese service region, LCD text, and prompt assets.
+- `CONFIG_MYBOT_LANGUAGE_EN_US`: English service region, LCD text, and prompt assets.
+- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`: status animations at up to 10 fps, enabled by default.
+- `CONFIG_MYBOT_LVGL_UI_LIGHT_THEME`: light UI theme; disabled by default for the dark theme.
 - `CONFIG_MYBOT_VIDEO`: encoded H.264 video uplink; it is enabled in the current AP build.
 - `CONFIG_MYBOT_VIDEO_WIDTH` / `CONFIG_MYBOT_VIDEO_HEIGHT`: `640x480` encoded output.
 - `CONFIG_MYBOT_VIDEO_SENSOR_WIDTH` / `CONFIG_MYBOT_VIDEO_SENSOR_HEIGHT` /
@@ -227,17 +229,18 @@ The `MyBot BK7259 platform` Kconfig menu provides:
   currently `256000` to `512000` bits per second.
 - The ADC channel, both voltage window bounds, and the function of each button.
 
-The language option selects both the service region and the prompt asset directory: Chinese
+The language option selects the LCD text, service region, and prompt asset directory: Chinese
 (`https://mybot.sh2.agoralab.co/api`) or English (`https://mybot.sg3.agoralab.co/api`). Exactly one
 of the two language options must be enabled.
 
 Everything else about the device identity is fixed by the port rather than configured:
 [ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c) derives the device id at runtime from the
-per-chip device UID (read by the CP) as the lowercase hex MD5 digest, matching the BK725x
-controller `build_device_config()` rule; it reports the SDK's own `MYBOT_VERSION_STRING` as the
-firmware version and `mybot-bk7259` as the hardware model, and prints both at startup. A device
-whose UID cannot be read has no identity, so it logs the failure and does not start. Do not commit
-production service credentials.
+per-chip device UID (read by the CP) using HMAC-SHA256 with `mybot-bk7259-device-id-v1` as the
+derivation key. The first 12 digest bytes are uppercase hex, formatted as
+`BK7259-<24 uppercase hex characters>`. It reports
+the SDK's own `MYBOT_VERSION_STRING` as the firmware version and `mybot-bk7259` as the hardware
+model, and prints both at startup. A device whose UID cannot be read has no identity, so it
+logs the failure and does not start. Do not commit production service credentials.
 
 ## Keys
 
@@ -270,19 +273,47 @@ Wi-Fi provisioning remains visible while the mybot SDK is stopped. The native 32
 rendered as a 385x320 logical RGB565 surface. GPIO53 enables panel power, GPIO5 drives reset, and
 the GPIO7 backlight is active low.
 
-The renderer uses two 246400-byte uncached frame-slab buffers and the direct DSI bus, panel, and
-DPU APIs. It does not include LVGL, GPU, touch, generated UI, a runtime font engine, or image
-assets. A compact 4-bit antialiased uppercase-and-digit glyph subset is blended directly into
-RGB565, while 4x4 coverage sampling smooths primitive edges without another framebuffer. It covers
-every mybot workflow screen and displays the six-digit numeric pairing code. The active-conversation
-screen keeps a fixed cyan ring, waveform, and `CONVERSATION` label. `state.listening`,
-`state.thinking`, and `state.speaking` appear as mutually exclusive microphone, processing-dots,
-and speaker-wave badges overlaid at the upper left in cyan, amber, and green. The upper-right
-voiceprint badge is drawn from the same primitives: a disc whose color carries the registration
-state, with a waveform glyph inside it. It is red while the server has not confirmed the voiceprint
-and turns green once it has. The green is the ESP32 boards' `RGB565(114, 255, 156)`; the ESP32 amber
-was replaced with the shared screen red because it did not stand out against the conversation
-screen. SDK LCD init/destroy only attach to and detach from the product-owned display.
+The renderer adapts the shared `mybot-esp32` LVGL status view to the pinned AVDK LVGL 9.5.0
+component. It covers all mybot workflow screens, pairing codes, Chinese and English text,
+voiceprint registration, and the server's mutually exclusive `listening`, `thinking`, and
+`speaking` indicators. Static emoji and lightweight status animations accompany the state cards.
+The ready hint matches the conversation button. GPU and touch remain disabled; this status UI
+does not display a camera preview.
+
+The layout reserves space for the rounded bezel: the header is inset 40 pixels horizontally
+and 14 from the top; the footer is inset 32 pixels horizontally and 18 from the bottom.
+
+SDK render calls copy their content into one latest-state mailbox and wake the `mybot_ui` task.
+That task alone updates the live view, advances LVGL timers, and flushes pixels. Intermediate
+pending states may coalesce into the newest state. SDK LCD init/destroy only attach to and detach
+from the product-owned display, so the UI task remains available for APSTA provisioning after the
+SDK stops. Cross-thread and display-completion state uses the BK7259 AOSL atomic interfaces.
+
+LVGL renders native RGB565 strips. The BK7259 backend rotates each changed rectangle into a free
+full-frame buffer, preserves unchanged pixels from the previous frame, and submits through the
+direct DSI bus, panel, and DPU APIs. A submitted frame is reused only after DPU's completion
+callback returns its ownership. Shutdown waits for the UI task and display callbacks; failed
+shutdown retains resources for a later retry.
+
+The display memory budget is separate from the audio/video pipeline:
+
+| Allocation | Size | Region |
+| --- | --- | --- |
+| Two 320x385 RGB565 scanout buffers | 2 x 246400 = 492800 bytes | Uncached media frame slab |
+| One 385x16 RGB565 draw strip | 12320 bytes | HSRAM |
+| UI task stack | 8192 bytes | HSRAM |
+| Temporary LVGL draw layers | 16 KiB preferred layer size; 64 KiB aggregate limit | HSRAM |
+| LVGL objects, styles, draw tasks, and RTOS control objects | Additional runtime allocations; peak requires target measurement | HSRAM / RTOS heaps |
+
+`projects/mybot/ap/lv_conf_custom.h` selects `LV_USE_OS=LV_OS_NONE`, one software draw unit,
+100 ms refresh, and HSRAM for LVGL's internal allocations. The 64 KiB draw-layer limit is not a
+limit on total UI memory. Four constant 64x64 ARGB8888 emoji images occupy 65536 pixel bytes in
+Flash, alongside the fixed UI font and LVGL's built-in fonts. The 20-pixel UI font covers ASCII
+and the fixed Chinese UI vocabulary; arbitrary Chinese SSIDs or chat text need an extended font.
+This font replaces the previous direct-renderer glyph subset. Resource provenance and licenses
+are recorded in [display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md).
+Build results, host tests and remaining hardware checks are recorded in
+[UI_VALIDATION.md](bk_solution_ai/projects/mybot/UI_VALIDATION.md).
 
 ## Video uplink
 
@@ -397,6 +428,8 @@ submodule.
 - The encoded video path is configured for 5 fps, but its sustained frame cadence, bitrate
   adaptation, key-frame/GOP behavior, and repeated session start/stop still require runtime
   verification on the target camera hardware.
+- The LVGL UI still requires target verification for panel rotation/colors, both languages,
+  repeated SDK stop/provision/start, and HSRAM/stack peaks with simultaneous audio and video.
 - The ADC key windows are the vendor Robot V2 defaults, validated on the Robot V2 board only. Each
   press logs the channel, the measured millivolts and the window it was matched against; on a board
   revision with different divider values, calibrate the `MYBOT_KEY_S*_MV_*` values from those
@@ -440,6 +473,9 @@ terms of use, including but not limited to:
 - [bk_solution_ai license](bk_solution_ai/LICENSE)
 - [AOSL license and additional terms](bk_solution_ai/components/mybot/mybot_aosl/aosl/LICENSE)
 - [Prompt asset license](bk_solution_ai/projects/mybot/assets/LICENSE.xiaozhi-esp32)
+- [LVGL license](bk_avdk_smp/ap/components/lvgl/LICENCE.txt)
+- [LVGL view, font, and emoji provenance](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)
+- [BK7259 third-party notices](bk_solution_ai/components/mybot/mybot_sdk/THIRD_PARTY_NOTICES.md)
 - [mybot third-party notices](https://github.com/junlon2006/mybot/blob/main/THIRD_PARTY_NOTICES.md)
 
 The AOSL license contains conditions in addition to Apache-2.0, so this combined project must not

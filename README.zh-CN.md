@@ -77,11 +77,11 @@ BK7259 固件采用 AP/CP 双核架构：
   `lib/arm/libagora-rtc-sdk.a`）。
 
 解决方案内嵌的 mybot SDK 以上游 commit
-`1baee9a61ddaa4c4b7b72406fa6c8a0503f4b61d` 的完整源码快照为基线，包含 RTM
+`4ae239c804257f8b5c557e5879b54d9a88d80847` 的完整源码快照为基线，包含 RTM
 `listening/thinking/speaking` 服务端状态 LCD indicator 和可选视频上行契约；BK7259 构建已启用
-视频。该快照另带两处在 `SDK_REVISION` 中明示的 BK7259 目标 patch：把 RTSA 日志级别设为
-`RTC_LOG_ERROR` 并在初始化后恢复 BK7259 的 AOSL 日志门限，以及在调试固件中打印 HTTPS 请求
-与响应 body。`SDK_REVISION` 同时记录 `include/`、`src/` 的确定性聚合摘要。AOSL 基线为 commit
+视频。该上游快照已经包含 `RTC_LOG_ERROR` 和恢复 AOSL 日志门限的修复；`SDK_REVISION` 另记录
+调试固件打印 HTTPS 请求与响应 body 的 BK7259 目标 patch。`SDK_REVISION` 同时记录
+`include/`、`src/` 的确定性聚合摘要。AOSL 基线为 commit
 `84e086084ebcd0ae2455a0ce5721950c5fe2e656`，另有五处已记录的 BK7259 HAL 修改。构建过程不接受
 `MYBOT_SDK_DIR` 或外部 AOSL 源码路径。
 
@@ -199,8 +199,10 @@ GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移
 
 `MyBot BK7259 platform` Kconfig 菜单提供：
 
-- `CONFIG_MYBOT_LANGUAGE_ZH_CN`：中文服务区域与中文提示音资源。
-- `CONFIG_MYBOT_LANGUAGE_EN_US`：英文服务区域与英文提示音资源。
+- `CONFIG_MYBOT_LANGUAGE_ZH_CN`：中文服务区域、LCD 文案与提示音资源。
+- `CONFIG_MYBOT_LANGUAGE_EN_US`：英文服务区域、LCD 文案与提示音资源。
+- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`：最高 10 fps 的状态动画，默认启用。
+- `CONFIG_MYBOT_LVGL_UI_LIGHT_THEME`：浅色 UI 主题，默认关闭并使用深色主题。
 - `CONFIG_MYBOT_VIDEO`：启用编码视频上行，参考固件中已设为 `y`。
 - `CONFIG_MYBOT_VIDEO_WIDTH` / `CONFIG_MYBOT_VIDEO_HEIGHT`：ISP 编码输出，参考值为
   `640x480`。
@@ -210,15 +212,15 @@ GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移
   `256000` 到 `512000` bit/s。
 - 每个按键的 ADC 通道、电压窗口上下界和对应功能。
 
-语言选项同时决定服务区域和提示音资源目录：中文
+语言选项同时决定 LCD 文案、服务区域和提示音资源目录：中文
 （`https://mybot.sh2.agoralab.co/api`）或英文（`https://mybot.sg3.agoralab.co/api`）。
 两个语言选项必须且只能启用一个。
 
 设备身份不由配置决定：[ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c) 在运行时
-以芯片唯一 UID（由 CP 读取）的小写十六进制 MD5 摘要作为设备 ID，与 BK725x 控制器
-`build_device_config()` 规则一致；固件版本上报 SDK 自身的 `MYBOT_VERSION_STRING`，
-硬件型号固定为 `mybot-bk7259`，两者在启动时打印。UID 无法读取的设备没有身份，会打印
-失败日志并拒绝启动。请勿把生产环境服务凭据提交到仓库。
+读取由 CP 提供的芯片唯一 UID，使用 HMAC-SHA256 和 `mybot-bk7259-device-id-v1` 派生密钥，
+取摘要前 12 字节并转换为大写十六进制，格式为 `BK7259-<24位大写十六进制>`。固件版本上报 SDK 自身的
+`MYBOT_VERSION_STRING`，硬件型号固定为 `mybot-bk7259`，两者在启动时打印。UID 无法读取的
+设备没有身份，会打印失败日志并拒绝启动。请勿把生产环境服务凭据提交到仓库。
 
 ## 按键
 
@@ -247,16 +249,41 @@ EasyFlash 或 Wi-Fi 时进行。擦除会清空 EasyFlash 环境（其中保存 
 界面依然可见。物理分辨率为 320x385，按 385x320 的逻辑 RGB565 画面渲染。GPIO53 控制屏
 供电，GPIO5 为复位，GPIO7 背光低有效。
 
-渲染器使用两块 246400 字节的非缓存 frame-slab 缓冲，直接调用 DSI bus、panel 和 DPU
-接口，不引入 LVGL、GPU、触摸、生成式 UI、运行时字体引擎或图片素材。文字使用紧凑的
-4-bit 抗锯齿大写字母和数字字模直接混合到 RGB565，图元边缘采用 4x4 覆盖率采样，不增加
-额外 framebuffer。它覆盖 mybot 的全部工作流界面并显示六位数字配对码。进入对话后，
-青色圆环、声波和 `CONVERSATION` 标题保持固定；
-`state.listening`、`state.thinking`、`state.speaking` 以互斥的小徽标叠加在左上角，分别使用
-青色麦克风、琥珀色思考圆点和绿色扬声器波纹。右上角同时保留声纹徽章：一个用颜色表达
-注册状态的圆盘，内部是声纹波形。服务端未确认声纹时为红色，确认后转为绿色；绿色取自
-ESP32 各板的 `RGB565(114, 255, 156)`，ESP32 原先的琥珀色因在对话界面上不够醒目而改用
-本仓通用的状态红。SDK 的 LCD init/destroy 只做产品自有显示的挂接与解挂。
+渲染器将 `mybot-esp32` 的共享 LVGL 状态视图适配到锁定版本的 AVDK LVGL 9.5.0，覆盖全部
+mybot 工作流界面、配对码、中英文文案、声纹注册，以及服务端互斥的 `listening`、
+`thinking`、`speaking` 状态。状态卡片配有静态表情与轻量状态动画，就绪提示对应对话按键。
+GPU 和触摸保持关闭；该状态 UI 不显示摄像头预览。
+
+布局为屏幕圆角预留安全区域：页眉左右各内收 40 像素、距顶部 14 像素；底栏左右各内收
+32 像素、距底部 18 像素。
+
+SDK 的 render 调用将内容复制到一个保存最新状态的 mailbox，并唤醒 `mybot_ui` 任务。
+只有该任务更新运行中的视图、执行 LVGL timer 和刷屏；来不及处理的中间状态可以合并为
+最新状态。SDK 的 LCD init/destroy 只做产品自有显示的挂接与解挂，所以 SDK 停止后，UI
+任务仍可显示 APSTA 配网页面。跨线程状态与显示完成状态使用 BK7259 的 AOSL 原子接口。
+
+LVGL 生成原生 RGB565 条带，BK7259 后端将变化区域旋转写入空闲整帧缓冲，并从上一帧保留
+未变化像素，再通过 DSI bus、panel 和 DPU 接口提交。已提交的缓冲必须等 DPU 完成回调
+归还所有权后才能复用。关闭时等待 UI 任务与显示回调退出；关闭失败时保留资源，供后续重试。
+
+显示内存预算与音视频流水线分开：
+
+| 分配项 | 大小 | 内存区域 |
+| --- | --- | --- |
+| 两块 320x385 RGB565 扫描缓冲 | 2 x 246400 = 492800 字节 | 非缓存媒体 frame slab |
+| 一块 385x16 RGB565 绘制条带 | 12320 字节 | HSRAM |
+| UI 任务栈 | 8192 字节 | HSRAM |
+| LVGL 临时绘制层 | 单层优选 16 KiB；总量上限 64 KiB | HSRAM |
+| LVGL 对象、样式、绘制任务与 RTOS 控制对象 | 额外动态分配，峰值需目标机测量 | HSRAM / RTOS 堆 |
+
+`projects/mybot/ap/lv_conf_custom.h` 选择 `LV_USE_OS=LV_OS_NONE`、单软件绘制单元、100 ms
+刷新间隔，并用 HSRAM 分配 LVGL 内部对象。64 KiB 只限制绘制层，不是 UI 总内存上限。
+构建结果、宿主测试和待上板检查项见
+[UI_VALIDATION.md](bk_solution_ai/projects/mybot/UI_VALIDATION.md)。
+四张常量 64x64 ARGB8888 表情共占 65536 字节 Flash 像素数据，另外还有固定 UI 字库和
+LVGL 内置字体。20 像素 UI 字库覆盖 ASCII 与固定中文文案；任意中文 SSID 或聊天内容需要
+扩充字库。新字库替代原先直接渲染的字形子集。资源来源与许可证记录在
+[display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)。
 
 ## 视频上行
 
@@ -312,7 +339,7 @@ python3 bk_solution_ai/projects/mybot/scripts/generate_assets_c.py \
 ## 源码边界
 
 - 内嵌的 mybot SDK `include/`、`src/` 以上游完整快照为基线，并包含 `SDK_REVISION` 明示的
-  两处 BK7259 目标 patch；`platforms/` 是 BK7259 平台适配源码。
+  BK7259 目标 patch；`platforms/` 是 BK7259 平台适配源码。
 - 内嵌的 AOSL 锁定在记录的版本，包括已声明的五处 BK7259 HAL 修改。
 - `bk_avdk_smp` 使用 `release/v4.0.1-mybot` 分支，它等于上游 `release/v4.0.1` 加上本产品
   的 SDK 侧修复 —— 目前是双核上的强制门户 DNS 服务。除此之外本移植不改动它的任何
@@ -354,6 +381,8 @@ git diff --submodule=log
   Ogg/Opus 内嵌在 `projects/mybot/assets/`；唤醒词仍关闭。
 - 编码视频链路已配置为 5 fps，但持续出帧节奏、码率自适应、关键帧/GOP 行为和重复会话
   start/stop 仍需在目标摄像头硬件上完成运行时验证。
+- LVGL UI 仍需在目标机验证屏幕方向与颜色、中英文显示、反复停止 SDK/配网/启动，以及
+  同时运行音视频时的 HSRAM 和栈峰值。
 - ADC 按键窗口是厂商 Robot V2 默认值，仅在 Robot V2 板子上验证过。每次按下都会打印
   通道、实测毫伏值和匹配到的窗口；若换成分压值不同的板型，可据此校准
   `MYBOT_KEY_S*_MV_*`。
@@ -393,6 +422,9 @@ git diff --submodule=log
 - [bk_solution_ai 许可证](bk_solution_ai/LICENSE)
 - [AOSL 许可证及附加条款](bk_solution_ai/components/mybot/mybot_aosl/aosl/LICENSE)
 - [提示音资源许可证](bk_solution_ai/projects/mybot/assets/LICENSE.xiaozhi-esp32)
+- [LVGL 许可证](bk_avdk_smp/ap/components/lvgl/LICENCE.txt)
+- [LVGL 视图、字体和表情来源](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)
+- [BK7259 第三方声明](bk_solution_ai/components/mybot/mybot_sdk/THIRD_PARTY_NOTICES.md)
 - [mybot 第三方声明](https://github.com/junlon2006/mybot/blob/main/THIRD_PARTY_NOTICES.md)
 
 AOSL 许可证在 Apache-2.0 之外还包含附加条款，因此本项目不得被描述为整体采用
