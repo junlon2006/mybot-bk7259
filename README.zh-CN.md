@@ -138,6 +138,13 @@ make -C bk_solution_ai/projects/mybot clean SDK_DIR="$PWD/bk_avdk_smp"
 make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
 ```
 
+如需分别编译中英文固件，在仓库根目录运行 `python3 scripts/build_all.py`。当前已启用
+视频，产物分别是 `releases/bk7259-zh-CN-video.bin` 和
+`releases/bk7259-en-US-video.bin`。用 `--language zh-CN` 或 `--language en-US`
+可只编译一种语言；还支持 `--dry-run`、`--no-clean`、`--build-root` 和
+`--output-root`。脚本在独立工程副本中分别编译 AP/CP，保留原工程配置与构建目录，
+并在所选版本都成功后再发布固件。
+
 验证不同打包时长时可设置 `MYBOT_AUDIO_PTIME_MS` 为 `20`、`40` 或 `60`，默认 `60`。
 切换取值前必须先 clean，使该值在重新执行 CMake configure 时生效：
 

@@ -63,3 +63,6 @@ dkms.conf
 
 # Reference material for this port; not a build input.
 /bk7259_robot_hardware/
+/build/
+/releases/
+/scripts/__pycache__/

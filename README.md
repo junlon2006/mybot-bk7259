@@ -152,6 +152,15 @@ make -C bk_solution_ai/projects/mybot clean SDK_DIR="$PWD/bk_avdk_smp"
 make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
 ```
 
+To build both Chinese and English firmware images in separate BK7259 project
+builds, run `python3 scripts/build_all.py`. The output files are
+`releases/bk7259-zh-CN-video.bin` and `releases/bk7259-en-US-video.bin` with the
+current video-enabled configuration. Use `--language zh-CN` or `--language en-US`
+to build one language. `--dry-run`, `--no-clean`, `--build-root`, and
+`--output-root` are also supported. The script keeps the original project
+configuration and build directory intact; each variant includes its own AP/CP
+build, and the images are published only after all requested variants succeed.
+
 Set `MYBOT_AUDIO_PTIME_MS` to `20`, `40`, or `60` when validating packet-time variants; the
 default is `60`. Clean before switching variants so the value is applied by a fresh CMake
 configure:
