@@ -77,8 +77,9 @@ BK7259 固件采用 AP/CP 双核架构：
   `lib/arm/libagora-rtc-sdk.a`）。
 
 解决方案内嵌的 mybot SDK 以上游 commit
-`83fbcb0969da4c73a5912326d699f90ec634b28e`（`main`，SDK 版本仍为 1.2.0）的完整源码快照
-为基线，包含视频控制串行化、提示音延后销毁、统一的 RTM 到 LCD 状态处理，以及 RTM
+`064397882187a242be25a525a91df83d353b78bb`（`main`，SDK 版本仍为 1.2.0）的完整源码快照
+为基线，新增控制事件非阻塞投递、重新配对时清理开聊请求、提示音代次跟踪及 HTTP/JSON
+边界修复。同时包含视频控制串行化、提示音延后销毁、统一的 RTM 到 LCD 状态处理，以及 RTM
 `listening/thinking/speaking` 服务端状态 LCD indicator 和可选视频上行契约；BK7259 构建已启用
 视频。该上游快照已经包含 `RTC_LOG_ERROR` 和恢复 AOSL 日志门限的修复；`SDK_REVISION` 另记录
 调试固件打印 HTTPS 请求与响应 body 的 BK7259 目标 patch。`SDK_REVISION` 同时记录
