@@ -32,7 +32,7 @@ to run mybot on the BK7259 platform:
 - Microphone capture with on-device hardware AEC, speaker playback, volume control, and audio power
   management.
 - MIPI CSI camera capture, ISP MP scaling, hardware FLEXA H.264 encoding, and encoded video uplink.
-- Resistor-ladder button, MIPI display, EasyFlash KV, HTTPS, and device identity adapters.
+- Single GPIO conversation key, MIPI display, EasyFlash KV, HTTPS, and device identity adapters.
 - Full-duplex audio and uplink video for AI multimodal sessions over Agora RTSA.
 - Embedded Chinese and English OGG assets for provisioning prompts and pairing-code announcements.
 - A complete flash image and an OTA package containing both the CP and AP firmware.
@@ -60,8 +60,7 @@ The BK7259 firmware uses an AP/CP dual-core architecture:
   session.
 - **Control loop** ([ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c)) selects APSTA
   provisioning or normal STA mode according to the saved Wi-Fi credentials. Once the network is
-  up it starts the mybot SDK, and manages reconnection, reprovisioning, factory reset, and
-  unexpected SDK exits.
+  up it starts the mybot SDK and monitors its lifecycle.
 
 ## Repository layout
 
@@ -203,16 +202,11 @@ The reference device workflow is:
    conversation button to start an AI multimodal conversation with full-duplex audio and camera
    video uplink.
 
-The five reference-board buttons are wired as one hardware reset and two resistor ladders read on
-ADC pads, so a button is identified by an ADC channel plus a voltage window rather than by a GPIO:
+The Yunqu V1.0 product exposes one firmware-visible direct GPIO conversation key:
 
-| Button | ADC | Window (mV) | Short press | Long press (about 2 s) |
+| Button | GPIO | Active level | Short press | Long press |
 | --- | --- | --- | --- | --- |
-| S1 | — | — | Hardware `CEN` reset; firmware never sees it | — |
-| S2 | 15 (GPIO13) | 500–1500 | Start or stop a conversation | Re-enter provisioning mode |
-| S3 | 15 (GPIO13) | 4500–6000 | — | Factory reset and reboot |
-| S4 | 4 (GPIO28) | 500–1500 | Decrease volume | — |
-| S5 | 4 (GPIO28) | 4500–6000 | Increase volume | — |
+| Conversation | GPIO47 (`KEY1`) | Low | Start or stop a conversation | Ignored |
 
 GPIO assignments and display, audio, and camera peripheral connections are board-level
 configuration.
@@ -239,7 +233,8 @@ The `MyBot BK7259 platform` Kconfig menu provides:
   `CONFIG_MYBOT_VIDEO_SENSOR_FPS`: `1280x720` sensor input at `5` fps.
 - `CONFIG_MYBOT_VIDEO_MIN_BPS` / `CONFIG_MYBOT_VIDEO_MAX_BPS`: encoder and RTSA bandwidth range,
   currently `256000` to `512000` bits per second.
-- The ADC channel, both voltage window bounds, and the function of each button.
+- `CONFIG_MYBOT_KEY_GPIO` and `CONFIG_MYBOT_KEY_ACTIVE_LEVEL`: the single conversation-key GPIO
+  and electrical active level.
 
 The language option selects the LCD text, service region, and prompt asset directory: Chinese
 (`https://mybot.sh2.agoralab.co/api`) or English (`https://mybot.sg3.agoralab.co/api`). Exactly one
@@ -256,27 +251,13 @@ logs the failure and does not start. Do not commit production service credential
 
 ## Keys
 
-The two ADC ladders are why a button is identified by a channel plus a voltage window: both buttons
-on one channel are distinguished only by the millivolts they produce. The windows on a channel must
-not overlap, because the driver rejects an overlapping registration, and the defaults match Robot
-V2. `CONFIG_ADC_KEY_LONG_PRESS_MS` sets the hold time before a long press fires; it is `2000`,
-which is the "about two seconds" above.
+The single conversation key is scanned on GPIO47 (`KEY1`) as an active-low input. A short press queries
+`mybot_get_state()`: `READY` emits the conversation-start event and
+`IN_CONVERSATION` emits the conversation-stop event. Other SDK states ignore the press. Long,
+double, volume, factory-reset, and reserved-key events are not registered.
 
-The volume keys emit `MYBOT_KEY_EVENT_VOLUME_UP` / `MYBOT_KEY_EVENT_VOLUME_DOWN`; the SDK routes
-those to `mybot_media_pipeline_adjust_volume()` and the platform volume adapter persists the
-resulting level. They are only delivered while the SDK is running.
-
-The S3 long press only posts a reset request — the erase runs after `mybot_stop()` has returned,
-never while the SDK still holds EasyFlash or Wi-Fi. It wipes the EasyFlash environment, which holds
-the Wi-Fi credential record, the device credential record, and the persisted volume, and then
-reboots. The device comes back unprovisioned and raises its `mybot-xxxx` access point again. It is
-long-press-only, so a stray touch on the button that sits next to the conversation key cannot erase
-the device.
-
-[usr_gpio_cfg.h](bk_solution_ai/projects/mybot/ap/config/bk7259_ap/usr_gpio_cfg.h) sets the
-matching power-on pad state. The ADC pads stay high-Z with no pull, because an internal pull-up
-would load the divider and skew the measured millivolts. That file also pins GPIO8/GPIO9, which are
-the 32.768 kHz crystal (`P8/32K_XO`, `P9/32K_XI`) and not buttons.
+[usr_gpio_cfg.h](bk_solution_ai/projects/mybot/ap/config/bk7259_ap/usr_gpio_cfg.h) sets GPIO47
+(`KEY1`) as an input with an internal pull-up. The CEN button remains hardware reset only.
 
 ## Display
 
@@ -361,10 +342,8 @@ typing the address. The DNS half is the `bk_avdk_smp` fix on the branch above; t
 the portal. A regular AP is unaffected, because the rewrite only happens while the SoftAP's own DNS
 server is enabled.
 
-Holding the configured conversation button for about two seconds requests reprovisioning. The key
-callback only posts a request; the application waits for `mybot_stop()` to finish before starting
-APSTA. After provisioning succeeds and the STA has IPv4, the application starts mybot again.
-Provisioning and mybot are therefore never active concurrently.
+There is no key-triggered reprovisioning path in this product build. Initial provisioning remains
+automatic when no usable saved Wi-Fi credentials exist; the portal completes before the SDK starts.
 
 ## Embedded voice assets
 
@@ -441,12 +420,8 @@ submodule.
   adaptation, key-frame/GOP behavior, and repeated session start/stop still require runtime
   verification on the target camera hardware.
 - The LVGL UI still requires target verification for panel rotation/colors, both languages,
-  repeated SDK stop/provision/start, and HSRAM/stack peaks with simultaneous audio and video.
-- The ADC key windows are the vendor Robot V2 defaults, validated on the Robot V2 board only. Each
-  press logs the channel, the measured millivolts and the window it was matched against; on a board
-  revision with different divider values, calibrate the `MYBOT_KEY_S*_MV_*` values from those
-  readings if a button does not register.
-- The S3 factory reset is destructive and cannot be undone from the device.
+  repeated SDK stop/start, and HSRAM/stack peaks with simultaneous audio and video.
+- The single GPIO key is based on the Yunqu V1.0 KEY1/GPIO47 connection.
 
 ## Documentation
 
