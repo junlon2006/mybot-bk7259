@@ -91,12 +91,16 @@ remotes.
   `lib/arm/libagora-rtc-sdk.a`).
 
 The solution vendors the mybot SDK from upstream commit
-`064397882187a242be25a525a91df83d353b78bb` on `main` (SDK version 1.2.0). This snapshot adds
+`cfd178a02fa94775cf01dc77e344f4ce5930225c` on `main` (SDK version 1.2.0). This snapshot adds
 nonblocking control-event delivery, re-pairing cancellation, prompt-generation tracking, and
 HTTP/JSON boundary fixes. It also includes serialized video control, deferred prompt teardown,
 unified RTM-to-LCD indicators, and the
 `RTC_LOG_ERROR` and AOSL log-gate preservation; the remaining BK7259 target patch records debug
-HTTPS request and response body logging in `SDK_REVISION`. It includes the RTM server-state LCD
+HTTPS request and response body logging in `SDK_REVISION`.
+Conversation hangup now stops local video/RTC, clears session PCM, and publishes READY before
+sending one HTTPS stop notification. Notification failure is logged without retry; the notification
+still runs synchronously on the control worker, so subsequent controls can wait for HTTP completion.
+It includes the RTM server-state LCD
 indicators and the video uplink contract, which the current BK7259 AP build enables. `SDK_REVISION` records the
 selected commit, target patch, and deterministic `include/` and `src/` digest. AOSL is based on commit
 `84e086084ebcd0ae2455a0ce5721950c5fe2e656` with its five documented BK7259 HAL fixes. The build has
