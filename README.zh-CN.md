@@ -24,9 +24,9 @@
 
 - BK7259 AP/CP 双核启动、内存和 Flash 分区配置。
 - Wi-Fi APSTA 配网（含强制门户）、网络重连和凭据持久化。
-- 麦克风采集（片上硬件 AEC）、扬声器播放、音量控制和音频功耗管理。
+- 双模拟麦克风采集、ADC2 功放回采参考 AEC、扬声器播放、音量控制和音频功耗管理。
 - MIPI 摄像头采集、ISP 图像处理、硬件 FLEXA H.264 编码和 RTC 视频上行。
-- 单个 GPIO 对话按键、MIPI 显示、EasyFlash KV、HTTPS 和设备 UID 适配。
+- 单个 GPIO 按键短按切换对话、长按 5 秒恢复出厂，以及 MIPI 显示、EasyFlash KV、HTTPS 和设备 UID 适配。
 - 基于 Agora RTSA 的全双工音频和 H.264 视频上行 AI 多模态会话。
 - 内嵌中英文 OGG 资源，用于配网提示音和配对码播报。
 - 包含 CP 与 AP 固件的完整烧录镜像和 OTA 包。
@@ -51,20 +51,21 @@ BK7259 固件采用 AP/CP 双核架构：
 - **CP** 负责基础系统初始化和 SMP 启动控制。
 - **AP** 初始化媒体服务并运行产品控制循环，承载平台适配、设备生命周期、网络、音频、
   视频采集与编码、显示和 RTC 会话。
-- **控制循环**（[ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c)）根据已保存的
-  Wi-Fi 凭据选择 APSTA 配网还是正常 STA 模式；网络就绪后启动 mybot SDK 并监控其生命周期。
+- **控制循环**（[ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c)）在联网前检查恢复出厂
+  标记，再根据已保存的 Wi-Fi 凭据选择 APSTA 配网还是正常 STA 模式；网络就绪后启动
+  mybot SDK，并处理会话切换、恢复出厂请求和生命周期日志。
 
 ## 仓库结构
 
 | 路径 | 职责 | 跟踪分支 |
 | --- | --- | --- |
-| `bk_avdk_smp/` | BK7259 AP/CP SDK 与平台基础组件 | `release/v4.0.1-mybot` |
-| `bk_solution_ai/` | AI 解决方案、mybot SDK 快照、BK7259 平台适配和固件工程 | `release/v4.0.1-mybot` |
+| `bk_avdk_smp/` | BK7259 AP/CP SDK 与平台基础组件 | `release/v4.0.1-mybot-r2` |
+| `bk_solution_ai/` | AI 解决方案、mybot SDK 快照、BK7259 平台适配和固件工程 | `release/v4.0.1-mybot-r2` |
 | `bk_solution_ai/projects/mybot/` | AP/CP 入口、板级配置、分区表和提示音资源 | 随 `bk_solution_ai` |
 | `bk_solution_ai/components/mybot/` | mybot 核心与 `platforms/bk7259` 实现 | 随 `bk_solution_ai` |
 
-两个 `-mybot` 分支是本产品的开发分支：它们从对应的 BK7259 `release/v4.0.1` 版本拉出，
-在其上叠加 MyBot 改动，因此直接检出 `release/v4.0.1` 无法构建本固件。顶层仓库的 gitlink
+两个 `-mybot-r2` 分支在 BK7259 `release/v4.0.1` 基础上包含 MyBot 产品改动和耘趣 V1.0
+新板适配，因此直接检出 `release/v4.0.1` 无法构建本固件。顶层仓库的 gitlink
 把两个子模块固定到确切 commit，以保证各开发环境使用同一份源码。`.gitmodules` 中的
 `branch` 仅在维护者显式从远端更新子模块时使用。
 
@@ -90,7 +91,7 @@ BK7259 固件采用 AP/CP 双核架构：
 
 - 支持 Git submodule 的 Git。
 - Linux 构建环境，以及 `bk_avdk_smp` 所需的交叉编译工具链。
-- 按 Robot V2 接线的 BK7259 开发板，或外设连接一致的兼容硬件。
+- 耘趣 V1.0 / Robot R2 接线的 BK7259 开发板，使用 GC9503CV MIPI 屏和双模拟麦。
 - 可访问兼容的 mybot 设备服务和有效的 Agora 服务配置。
 
 板级文档随子模块提供：解决方案与 AVDK 见 `bk_solution_ai/docs/bk7259/`，
@@ -101,7 +102,7 @@ SDK 与烧录工具见 `bk_avdk_smp`。
 通过 HTTPS 克隆本仓库及其子模块：
 
 ```bash
-git clone --recurse-submodules https://github.com/junlon2006/mybot-bk7259.git
+git clone --branch release/v4.0.1-mybot-r2 --recurse-submodules https://github.com/junlon2006/mybot-bk7259.git
 cd mybot-bk7259
 ```
 
@@ -138,12 +139,12 @@ make -C bk_solution_ai/projects/mybot clean SDK_DIR="$PWD/bk_avdk_smp"
 make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
 ```
 
-如需分别编译中英文固件，在仓库根目录运行 `python3 scripts/build_all.py`。当前已启用
-视频，产物分别是 `releases/bk7259-zh-CN-video.bin` 和
-`releases/bk7259-en-US-video.bin`。用 `--language zh-CN` 或 `--language en-US`
-可只编译一种语言；还支持 `--dry-run`、`--no-clean`、`--build-root` 和
-`--output-root`。脚本在独立工程副本中分别编译 AP/CP，保留原工程配置与构建目录，
-并在所选版本都成功后再发布固件。
+`scripts/build_all.py` 在独立工程副本中编译 AP/CP，保留原工程配置和构建目录，
+支持 `--language`、`--dry-run`、`--no-clean`、`--build-root` 和 `--output-root`。
+英文版可用 `python3 scripts/build_all.py --language en-US`，当前启用视频的产物为
+`releases/bk7259-en-US-video.bin`。脚本的中文 ELF 地址校验仍使用旧的
+`mybot.sh2.agoralab.co`，尚未跟随当前生产地址更新；中文版请使用上面的原工程 `make`
+命令。中文校验同步前，默认一次构建两种语言的脚本不会发布所选固件。
 
 验证不同打包时长时可设置 `MYBOT_AUDIO_PTIME_MS` 为 `20`、`40` 或 `60`，默认 `60`。
 切换取值前必须先 clean，使该值在重新执行 CMake configure 时生效：
@@ -179,14 +180,17 @@ CP 与 AP 的独立镜像分别位于：
    自动弹出，无需手动输入地址，详见 [Wi-Fi 配网](#wi-fi-配网)。
 3. STA 链路获取到 IPv4 地址后，门户和 SoftAP 停止，设备启动 mybot SDK 完成注册、配对
    和鉴权。
-4. 未绑定的设备会显示并播报配对码；绑定完成后，用对话按键发起带全双工音频和摄像头
-   视频上行的 AI 多模态对话。
+4. 未绑定的设备会显示并播报配对码，在网页控制台输入该码；绑定完成后，短按松手发起
+   带全双工音频和摄像头视频上行的 AI 多模态对话，再次短按松手结束对话。
+5. 按住同一按键 5 秒恢复本地出厂设置并重启，随后重新配网。
+
+若存在有效的恢复出厂标记，设备先完成清理并重启，之后才走上述联网流程。
 
 耘趣 V1.0 产品只有一个固件可见的 GPIO 对话按键：
 
 | 按键 | GPIO | 有效电平 | 短按 | 长按 |
 | --- | --- | --- | --- | --- |
-| 对话键 | GPIO47（`KEY1`） | 低电平 | 开始 / 结束对话 | 忽略 |
+| 对话键 | GPIO47（`KEY1`） | 低电平 | 松手时开始 / 结束对话 | 按住 5 秒恢复出厂 |
 
 GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移植到不同的 BK7259 硬件需要做
 相应的配置和平台改动。
@@ -216,7 +220,7 @@ GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移
 - `CONFIG_MYBOT_KEY_GPIO`、`CONFIG_MYBOT_KEY_ACTIVE_LEVEL`：单个对话键的 GPIO 和有效电平。
 
 语言选项同时决定 LCD 文案、服务区域和提示音资源目录：中文
-（`https://mybot.sh2.agoralab.co/api`）或英文（`https://mybot.sg3.agoralab.co/api`）。
+（`https://botstation.shengwang.cn/api`）或英文（`https://mybot.sg3.agoralab.co/api`）。
 两个语言选项必须且只能启用一个。
 
 设备身份不由配置决定：[ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c) 在运行时
@@ -227,18 +231,71 @@ GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移
 
 ## 按键
 
-单个对话键使用 GPIO47（`KEY1`）低电平有效输入。短按查询
-`mybot_get_state()`：`READY` 发出开始对话事件，`IN_CONVERSATION` 发出结束对话事件，
-其他 SDK 状态忽略按键。长按、双击、音量、恢复出厂和预留按键事件均未注册。
+单个对话键使用 GPIO47（`KEY1`）低电平有效输入，每 20 ms 扫描，两次一致采样消抖。
+不足 5 秒的按压在松手后发出会话切换请求；产品任务查询 `mybot_get_state()`：
+`READY` 发出开始对话事件，`IN_CONVERSATION` 发出结束对话事件，其他 SDK 状态忽略短按。
+按住达到 5 秒只发出一次恢复出厂请求，松手不再发出会话事件。
+双击、音量和预留按键事件均未注册。
 
 [usr_gpio_cfg.h](bk_solution_ai/projects/mybot/ap/config/bk7259_ap/usr_gpio_cfg.h)
 将 GPIO47（`KEY1`）配置为带内部上拉的输入。CEN 按键只保留硬件复位功能。
 
+长按从平台按键扫描准备完成后可用，覆盖配网、网络断开、会话中及 SDK 启动失败后的等待
+状态，不依赖 SDK 按键回调。按键准备时若已按住，必须先松开再开始新手势，因此持续按住
+跨过重启不会再次触发恢复出厂。5 秒是手势阈值，实际清理还需等待 SDK 和网络退出。
+
+## 恢复出厂
+
+产品任务处理恢复请求，按键扫描回调只投递标志，不直接操作 Flash、网络或 SDK：
+
+1. 显示“正在恢复出厂设置”，保存并读回校验 `mybot.factory_reset.v1` 恢复意图。
+2. 调用 `mybot_stop()`，确认 SDK 已停止且状态为 `STOPPED`。
+3. 停止配网门户、SoftAP、扫描和 STA，并确认驱动停止成功。
+4. 依次删除下表三个产品记录并检查其已不存在，最后删除恢复意图。
+5. 显示“恢复完成，正在重启”，重启后进入无本地 Wi-Fi 凭据的配网流程。
+
+| 删除的记录 | 内容 |
+| --- | --- |
+| `mybot.device_auth` | 本地设备鉴权数据 |
+| `mybot.wifi.v1` | Wi-Fi 凭据 |
+| `mybot.volume.v1` | 持久化音量 |
+
+恢复出厂不擦除整个 EasyFlash ENV、固件或射频校准数据；芯片 UID 和派生设备 ID 保持
+不变，也不调用服务端解绑接口。重新联网后 SDK 重新注册，并按服务端保留的绑定状态工作。
+
+任一步失败都不会自动重启，屏幕提示“恢复失败，请长按重试”；业务保持停止，松开按键
+后再次长按 5 秒重试。未完成的清理保留意图，最终标记删除报错时尝试重建标记。
+有效恢复意图持久化后若断电，下次启动会在联网和启动 SDK 前继续
+清理。可检测的标记异常显示失败页，等待新的长按；在产品任务写入意图之前断电不会保留
+仅存于内存的按键请求。
+
+接口独立放在
+[`bk7259_factory_reset.h`](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/include/bk7259_factory_reset.h)
+和 [`bk7259_key.h`](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/include/bk7259_key.h)，
+新增接口使用 `bk7259_*` 命名。`mybot_bk7259_platform.h` 保持平台级抽象。
+
+## 上电初始化
+
+CP 启动 AP 后，AP 调用 `bk_init()`、打印版本并初始化媒体服务，再创建产品控制任务。
+产品任务按以下顺序初始化：
+
+1. 读取 UID 并生成设备 ID、服务地址和版本配置，初始化 AOSL。
+2. 准备 LCD、Wi-Fi 管理器和 GPIO47 按键扫描。
+3. 检查持久恢复意图；有效标记先续做恢复，可检测的异常标记等待新的长按。
+4. 无恢复任务时注册平台描述符，再连接已存 Wi-Fi 或进入 APSTA 门户。
+5. 获取 STA IPv4 并关闭门户、SoftAP 后调用 `mybot_start()`。
+6. 产品循环处理短按、恢复请求和 SDK 状态日志；会话由 SDK 管理，RTC 连接后启动视频。
+
+正常网络设置或 SDK 启动失败后，产品保留已准备好的显示和按键，等待长按恢复出厂。
+媒体、平台准备或描述符注册等更早的初始化错误会退出产品任务。
+
 ## 显示
 
-产品层从平台准备到平台关闭全程独占一块 JD9855 MIPI 屏，因此在 mybot SDK 停止期间配网
-界面依然可见。物理分辨率为 320x385，按 385x320 的逻辑 RGB565 画面渲染。GPIO53 控制屏
-供电，GPIO5 为复位，GPIO7 背光低有效。
+产品层从平台准备到平台关闭全程独占一块 GC9503CV MIPI 屏，因此在 mybot SDK 停止期间
+配网和恢复出厂界面依然可见。物理分辨率为 480x640，按 640x480 的逻辑 RGB565 画面渲染。
+GPIO20 控制 3.3V 供电，GPIO29 控制 LCD/摄像头共用的 2.8V 电源，GPIO42 为复位，
+GPIO40 背光低有效。共用 2.8V 电源由显示持有到平台关闭；结束视频只复位摄像头，
+不会关闭该电源导致屏幕变黑。
 
 渲染器将 `mybot-esp32` 的共享 LVGL 状态视图适配到锁定版本的 AVDK LVGL 9.5.0，覆盖全部
 mybot 工作流界面、配对码、中英文文案、声纹注册，以及服务端互斥的 `listening`、
@@ -253,6 +310,10 @@ SDK 的 render 调用将内容复制到一个保存最新状态的 mailbox，并
 最新状态。SDK 的 LCD init/destroy 只做产品自有显示的挂接与解挂，所以 SDK 停止后，UI
 任务仍可显示 APSTA 配网页面。跨线程状态与显示完成状态使用 BK7259 的 AOSL 原子接口。
 
+恢复出厂的恢复中、失败和重启中页面通过同一显示任务渲染，中英文同步；恢复状态优先于
+SDK 页面，SDK 的停止、render 或 LCD 解挂不会覆盖恢复提示。该功能复用现有视图和缓冲，
+没有新增 UI 任务。
+
 LVGL 生成原生 RGB565 条带，BK7259 后端将变化区域旋转写入空闲整帧缓冲，并从上一帧保留
 未变化像素，再通过 DSI bus、panel 和 DPU 接口提交。已提交的缓冲必须等 DPU 完成回调
 归还所有权后才能复用。关闭时等待 UI 任务与显示回调退出；关闭失败时保留资源，供后续重试。
@@ -261,8 +322,8 @@ LVGL 生成原生 RGB565 条带，BK7259 后端将变化区域旋转写入空闲
 
 | 分配项 | 大小 | 内存区域 |
 | --- | --- | --- |
-| 两块 320x385 RGB565 扫描缓冲 | 2 x 246400 = 492800 字节 | 非缓存媒体 frame slab |
-| 一块 385x16 RGB565 绘制条带 | 12320 字节 | HSRAM |
+| 两块 480x640 RGB565 扫描缓冲 | 2 x 614400 = 1228800 字节 | 非缓存媒体 frame slab |
+| 一块 640x16 RGB565 绘制条带 | 20480 字节 | HSRAM |
 | UI 任务栈 | 8192 字节 | HSRAM |
 | LVGL 临时绘制层 | 单层优选 16 KiB；总量上限 64 KiB | HSRAM |
 | LVGL 对象、样式、绘制任务与 RTOS 控制对象 | 额外动态分配，峰值需目标机测量 | HSRAM / RTOS 堆 |
@@ -272,9 +333,24 @@ LVGL 生成原生 RGB565 条带，BK7259 后端将变化区域旋转写入空闲
 构建结果、宿主测试和待上板检查项见
 [UI_VALIDATION.md](bk_solution_ai/projects/mybot/UI_VALIDATION.md)。
 四张常量 64x64 ARGB8888 表情共占 65536 字节 Flash 像素数据，另外还有固定 UI 字库和
-LVGL 内置字体。20 像素 UI 字库覆盖 ASCII 与固定中文文案；任意中文 SSID 或聊天内容需要
+LVGL 内置字体。20 像素 UI 字库现含 170 个字符，覆盖 ASCII、配对及恢复出厂中文文案；任意中文 SSID 或聊天内容需要
 扩充字库。新字库替代原先直接渲染的字形子集。资源来源与许可证记录在
 [display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)。
+
+## 音频采集与音量
+
+当前 R2 板使用三通道模拟 ADC 采集：ADC0、ADC1 接两颗模拟麦克风，ADC2 接 HT6872
+功放回采参考。麦克风通道的模拟/数字增益为 20/16 dB，参考通道为 0/0 dB；DMIC 关闭，
+ADC 的 `aec_en=0`，避免追加数字 DAC 参考通道。
+
+采集链为 `onboard_mic_stream_v2 -> aec_v3_algorithm_v2 -> raw_stream`。AEC 使用硬件
+模式和通道内 ADC2 参考，启用双麦处理与传统降噪，VAD 关闭，最终交给 SDK 的仍是
+16 kHz、单声道、16 位 PCM。扬声器使用 GPIO50 高电平使能功放。
+
+音量通过 SDK 的 `audio_volume` ops 控制扬声器数字增益，变更时同步持久化到
+`mybot.volume.v1`；写入失败会在后续设置或销毁音量模块时重试。当前板没有音量加减按键。
+恢复出厂删除该记录，重启后按扬声器默认
+增益初始化音量。
 
 ## 视频上行
 
@@ -282,8 +358,9 @@ LVGL 内置字体。20 像素 UI 字库覆盖 ASCII 与固定中文文案；任�
 生成 `640x480` NV12 帧，硬件 FLEXA H.264 编码器通过 Agora RTSA 主视频流发送完整 access
 unit。设备不接收或渲染远端视频，音频链路仍为全双工。
 
-启动 mybot 时只初始化视频 context，摄像头和编码器保持关闭；RTC 报告会话已连接后才给相机
-上电并启动编码。结束对话时，在离开 RTC 前依次停止视频 worker、编码器、摄像头和相机电源；
+启动 mybot 时只初始化视频 context，摄像头和编码器保持关闭；RTC 报告会话已连接后才打开
+摄像头并启动编码。结束对话时，在离开 RTC 前依次停止视频 worker、编码器和摄像头，
+保持传感器复位；LCD 持有的共用 2.8V 电源继续开启。
 完整 SDK 关闭流程也会再次执行 stop/destroy 作为兜底。RTSA 的带宽估计回调会更新编码器目标
 码率，并钳制在 `256000` 到 `512000` bit/s，初始目标为 `384000` bit/s；RTSA 关键帧请求会
 强制生成 IDR。
@@ -304,8 +381,9 @@ SoftAP 通过 DHCP 只下发 `192.168.4.1` 作为解析器，并对所有 DNS �
 即可弹出的原因。DNS 那一半是上面分支上的 `bk_avdk_smp` 修复，重定向在门户侧。普通 AP
 不受影响，因为改写只在 SoftAP 自身的 DNS 服务启用时生效。
 
-本产品没有按键触发的重新配网路径。首次启动或没有可用 Wi-Fi 凭据时仍会自动进入配网门户，
-门户完成后才启动 mybot SDK。
+长按恢复出厂会清除 Wi-Fi 凭据并重启，之后自动进入配网门户；没有保留其它配置的独立
+按键重新配网手势。网络连接、扫描和门户 I/O 会检查恢复请求，取消后返回产品任务统一
+处理。驱动停止失败时保留资源所有权供后续重试，未确认网络退出前不删除配置。
 
 ## 内嵌语音资源
 
@@ -331,8 +409,8 @@ python3 bk_solution_ai/projects/mybot/scripts/generate_assets_c.py \
 - 内嵌的 mybot SDK `include/`、`src/` 以上游完整快照为基线，并包含 `SDK_REVISION` 明示的
   BK7259 目标 patch；`platforms/` 是 BK7259 平台适配源码。
 - 内嵌的 AOSL 锁定在记录的版本，包括已声明的五处 BK7259 HAL 修改。
-- `bk_avdk_smp` 使用 `release/v4.0.1-mybot` 分支，它等于上游 `release/v4.0.1` 加上本产品
-  的 SDK 侧修复 —— 目前是双核上的强制门户 DNS 服务。除此之外本移植不改动它的任何
+- `bk_avdk_smp` 使用 `release/v4.0.1-mybot-r2` 分支，在上游 `release/v4.0.1` 基础上包含
+  双核强制门户 DNS 服务和 GC9503CV R2 屏驱动。除此之外本移植不改动它的任何
   tracked 内容，mybot 的音频、视频、配网和显示集成只使用其公开组件 API。
 - BK 平台源码只通过 `<mybot/platform/...>` 引用 mybot。
 - `projects/mybot/ap/ap_main.c` 是公开 `<mybot/mybot.h>` API 的唯一应用生命周期使用者，
@@ -371,9 +449,10 @@ git diff --submodule=log
   Ogg/Opus 内嵌在 `projects/mybot/assets/`；唤醒词仍关闭。
 - 编码视频链路已配置为 5 fps，但持续出帧节奏、码率自适应、关键帧/GOP 行为和重复会话
   start/stop 仍需在目标摄像头硬件上完成运行时验证。
-- LVGL UI 仍需在目标机验证屏幕方向与颜色、中英文显示、反复停止 SDK/启动，以及
-  同时运行音视频时的 HSRAM 和栈峰值。
-- 单个 GPIO 按键采用耘趣 V1.0 的 KEY1/GPIO47 输入配置。
+- R2 屏幕、结束会话后屏幕保持点亮、双模拟麦上行和 AEC、长按恢复出厂已由用户反馈
+  真机测试通过。中英文固件编译通过，恢复流程已做宿主故障注入；断电续做、Flash/驱动
+  故障、长时间运行及同时音视频的 HSRAM 和栈峰值仍需专项真机验证。
+- 单个 GPIO 按键采用耘趣 V1.0 的 KEY1/GPIO47 输入配置，CEN 保留硬件复位功能。
 
 ## 文档
 

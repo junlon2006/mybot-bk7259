@@ -32,7 +32,8 @@ to run mybot on the BK7259 platform:
 - Microphone capture with on-device hardware AEC, speaker playback, volume control, and audio power
   management.
 - MIPI CSI camera capture, ISP MP scaling, hardware FLEXA H.264 encoding, and encoded video uplink.
-- Single GPIO conversation key, MIPI display, EasyFlash KV, HTTPS, and device identity adapters.
+- Single GPIO conversation/factory-reset key, MIPI display, EasyFlash KV, HTTPS, and device identity
+  adapters.
 - Full-duplex audio and uplink video for AI multimodal sessions over Agora RTSA.
 - Embedded Chinese and English OGG assets for provisioning prompts and pairing-code announcements.
 - A complete flash image and an OTA package containing both the CP and AP firmware.
@@ -59,22 +60,25 @@ The BK7259 firmware uses an AP/CP dual-core architecture:
   adapters, device lifecycle, networking, audio, video capture and encoding, display, and RTC
   session.
 - **Control loop** ([ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c)) selects APSTA
-  provisioning or normal STA mode according to the saved Wi-Fi credentials. Once the network is
-  up it starts the mybot SDK and monitors its lifecycle.
+  provisioning or normal STA mode according to the saved Wi-Fi credentials. After preparing the
+  product-owned key, display, and network manager, it checks for an interrupted factory reset
+  before registering the platform or starting the network and SDK. Once the network is up it
+  starts the mybot SDK and handles conversation and factory-reset requests.
 
 ## Repository layout
 
 | Path | Responsibility | Tracking branch |
 | --- | --- | --- |
-| `bk_avdk_smp/` | BK7259 AP/CP SDK and platform foundation components | `release/v4.0.1-mybot` |
-| `bk_solution_ai/` | AI solution, mybot SDK snapshot, BK7259 platform port, and firmware project | `release/v4.0.1-mybot` |
+| `bk_avdk_smp/` | BK7259 AP/CP SDK and platform foundation components | `release/v4.0.1-mybot-r2` |
+| `bk_solution_ai/` | AI solution, mybot SDK snapshot, BK7259 platform port, and firmware project | `release/v4.0.1-mybot-r2` |
 | `bk_solution_ai/projects/mybot/` | AP/CP entry points, board configuration, partition table, and prompt assets | From `bk_solution_ai` |
 | `bk_solution_ai/components/mybot/` | mybot core and the `platforms/bk7259` implementation | From `bk_solution_ai` |
 
-Both `-mybot` branches are this product's lines: they start at the corresponding BK7259
-`release/v4.0.1` release and carry the MyBot changes on top, so a plain `release/v4.0.1` checkout
-does not build this firmware. The gitlinks in the top-level repository pin both submodules to exact
-commits so that every development environment uses the same source revisions. The `branch` values
+Both `-mybot-r2` branches extend the `-mybot` integration for the Yunqu V1.0 R2 board, including its
+LCD, GPIO key, and audio wiring. They descend from the corresponding BK7259 `release/v4.0.1`
+release, so a plain `release/v4.0.1` checkout does not build this firmware. The gitlinks in the
+top-level repository pin both submodules to exact commits so that every development environment
+uses the same source revisions. The `branch` values
 in `.gitmodules` are used only when maintainers explicitly update the submodules from their
 remotes.
 
@@ -102,7 +106,7 @@ no `MYBOT_SDK_DIR` or external AOSL source-path input.
 
 - Git with Git submodule support.
 - A Linux build environment and the cross-compilation toolchain required by `bk_avdk_smp`.
-- A BK7259 development board wired as Robot V2, or compatible hardware using the same peripheral
+- A BK7259 Yunqu V1.0 R2 board, or compatible hardware using the same peripheral
   connections.
 - Access to a compatible mybot device service and valid Agora service configuration.
 
@@ -114,7 +118,7 @@ solution and the AVDK, and `bk_avdk_smp` for the SDK and flashing tools.
 Clone the repository and its submodules over HTTPS:
 
 ```bash
-git clone --recurse-submodules https://github.com/junlon2006/mybot-bk7259.git
+git clone --branch release/v4.0.1-mybot-r2 --recurse-submodules https://github.com/junlon2006/mybot-bk7259.git
 cd mybot-bk7259
 ```
 
@@ -153,14 +157,15 @@ make -C bk_solution_ai/projects/mybot clean SDK_DIR="$PWD/bk_avdk_smp"
 make -C bk_solution_ai/projects/mybot bk7259 SDK_DIR="$PWD/bk_avdk_smp"
 ```
 
-To build both Chinese and English firmware images in separate BK7259 project
-builds, run `python3 scripts/build_all.py`. The output files are
-`releases/bk7259-zh-CN-video.bin` and `releases/bk7259-en-US-video.bin` with the
-current video-enabled configuration. Use `--language zh-CN` or `--language en-US`
-to build one language. `--dry-run`, `--no-clean`, `--build-root`, and
-`--output-root` are also supported. The script keeps the original project
-configuration and build directory intact; each variant includes its own AP/CP
-build, and the images are published only after all requested variants succeed.
+`scripts/build_all.py` supports separate Chinese and English AP/CP builds with
+`releases/bk7259-zh-CN-video.bin` and `releases/bk7259-en-US-video.bin` filenames.
+Its Chinese endpoint check still expects `https://mybot.sh2.agoralab.co/api`, while
+the current R2 platform uses `https://botstation.shengwang.cn/api`. Until that check
+is updated, build Chinese firmware with the original-project `make` command above
+and English firmware with `python3 scripts/build_all.py --language en-US`.
+`--dry-run`, `--no-clean`, `--build-root`, and `--output-root` are also supported.
+The script keeps the original project configuration and build directory intact;
+images are published only after all requested variants succeed.
 
 Set `MYBOT_AUDIO_PTIME_MS` to `20`, `40`, or `60` when validating packet-time variants; the
 default is `60`. Clean before switching variants so the value is applied by a fresh CMake
@@ -198,15 +203,17 @@ The reference device workflow is:
    — see [Wi-Fi provisioning](#wi-fi-provisioning).
 3. After the STA link obtains an IPv4 address, the portal and SoftAP stop and the device starts the
    mybot SDK for registration, pairing, and authentication.
-4. An unclaimed device displays and announces its pairing code. After the device is claimed, use the
-   conversation button to start an AI multimodal conversation with full-duplex audio and camera
-   video uplink.
+4. An unclaimed device displays and announces its pairing code for entry in the web console. After
+   the device is claimed, briefly press and release the conversation button to start an AI
+   multimodal conversation with full-duplex audio and camera video uplink; press and release again
+   to stop it.
+5. Hold the same button for five seconds to reset the local device settings and restart Wi-Fi setup.
 
 The Yunqu V1.0 product exposes one firmware-visible direct GPIO conversation key:
 
 | Button | GPIO | Active level | Short press | Long press |
 | --- | --- | --- | --- | --- |
-| Conversation | GPIO47 (`KEY1`) | Low | Start or stop a conversation | Ignored |
+| Conversation | GPIO47 (`KEY1`) | Low | Release to start or stop a conversation | Hold 5 seconds to factory reset |
 
 GPIO assignments and display, audio, and camera peripheral connections are board-level
 configuration.
@@ -237,7 +244,7 @@ The `MyBot BK7259 platform` Kconfig menu provides:
   and electrical active level.
 
 The language option selects the LCD text, service region, and prompt asset directory: Chinese
-(`https://mybot.sh2.agoralab.co/api`) or English (`https://mybot.sg3.agoralab.co/api`). Exactly one
+(`https://botstation.shengwang.cn/api`) or English (`https://mybot.sg3.agoralab.co/api`). Exactly one
 of the two language options must be enabled.
 
 Everything else about the device identity is fixed by the port rather than configured:
@@ -251,20 +258,80 @@ logs the failure and does not start. Do not commit production service credential
 
 ## Keys
 
-The single conversation key is scanned on GPIO47 (`KEY1`) as an active-low input. A short press queries
-`mybot_get_state()`: `READY` emits the conversation-start event and
-`IN_CONVERSATION` emits the conversation-stop event. Other SDK states ignore the press. Long,
-double, volume, factory-reset, and reserved-key events are not registered.
+The single conversation key is scanned on GPIO47 (`KEY1`) as an active-low input every 20 ms with
+two-sample debounce. A short press posts a request on release. The product control loop queries
+`mybot_get_state()`: `READY` dispatches the conversation-start event and `IN_CONVERSATION`
+dispatches the conversation-stop event. Other SDK states ignore short presses. Double-press,
+volume, and reserved-key actions are not registered.
+
+Holding the key for five seconds posts one factory-reset request and suppresses the short action
+on release. A key already held when the platform prepares must be released before a new gesture
+can start, preventing a reset loop across reboot. Long press is available after successful
+platform preparation, including Wi-Fi provisioning and periods before the SDK attaches its key
+callback. Five seconds is the gesture threshold; completing reset also requires SDK and network
+shutdown.
 
 [usr_gpio_cfg.h](bk_solution_ai/projects/mybot/ap/config/bk7259_ap/usr_gpio_cfg.h) sets GPIO47
 (`KEY1`) as an input with an internal pull-up. The CEN button remains hardware reset only.
 
+## Factory reset
+
+The product task owns reset execution; the key timer only posts requests. It displays the reset
+status and persists `mybot.factory_reset.v1` before stopping the SDK. Cleanup starts only after
+the SDK reaches `STOPPED` and the portal, SoftAP, scan, and STA teardown succeed, so configuration
+writers cannot recreate deleted records.
+
+| Record | Reset action |
+| --- | --- |
+| `mybot.device_auth` | Delete local device authentication |
+| `mybot.wifi.v1` | Delete saved Wi-Fi credentials |
+| `mybot.volume.v1` | Delete saved volume; subsequent startup uses the speaker default |
+| `mybot.factory_reset.v1` | Delete the reset marker last, after verifying the three records are absent |
+
+Successful cleanup displays the reboot phase, then restarts into the normal first-boot network
+setup flow. Reset removes only these product records. The UID-derived device ID remains unchanged,
+and reset does not send a server-side unbind request.
+
+If persistence, SDK/network shutdown, or deletion fails, the device displays a failure and waits
+for a fresh five-second press to retry. Incomplete cleanup keeps the persisted marker, or attempts
+to restore it if the final marker deletion fails. Boot checks a valid marker before network/SDK
+startup and resumes cleanup. If marker lookup reports invalid or unreadable data, the failure page
+requires a fresh long press. The marker is persisted when the product task processes the request,
+so power loss before that point does not establish a pending reset. Storage fault-detection limits are recorded in
+[UI_VALIDATION.md](bk_solution_ai/projects/mybot/UI_VALIDATION.md).
+
+The independent [bk7259_key.h](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/include/bk7259_key.h)
+and [bk7259_factory_reset.h](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/include/bk7259_factory_reset.h)
+declare `bk7259_*` product requests and reset helpers. The platform registration abstraction remains
+in `mybot_bk7259_platform.h`.
+
+## Startup
+
+The CP initializes the BK runtime and starts the AP. The AP startup sequence is:
+
+1. Initialize the BK runtime and media service, then create the `mybot_app` product task.
+2. Build the server/firmware/hardware configuration and derive the device ID from the chip UID.
+3. Initialize AOSL and prepare the product-owned LCD, Wi-Fi manager, and GPIO key, in that order.
+4. Check for a pending factory reset before platform registration or network/SDK startup. A valid
+   marker resumes reset; a reported marker error waits for a fresh five-second hold.
+5. Register the complete platform descriptor and connect saved Wi-Fi, or finish APSTA provisioning.
+6. Start the SDK after STA obtains IPv4; it handles registration, authentication, and pairing
+   according to the server's binding state.
+7. Poll the SDK lifecycle and handle short conversation requests and long factory-reset requests.
+
+Network/SDK startup failures and runtime exit retain the prepared key and display while waiting
+for factory reset. Earlier identity, media-service, platform-preparation, or descriptor-registration failures
+can exit startup; the reset recovery path is not guaranteed for those failures. A key held while
+the platform prepares must be released before a new gesture.
+
 ## Display
 
-The product owns one JD9855 MIPI display from platform preparation through platform shutdown, so
-Wi-Fi provisioning remains visible while the mybot SDK is stopped. The native 320x385 panel is
-rendered as a 385x320 logical RGB565 surface. GPIO53 enables panel power, GPIO5 drives reset, and
-the GPIO7 backlight is active low.
+The product owns one GC9503CV MIPI display from platform preparation through platform shutdown, so
+Wi-Fi provisioning and reset status remain visible while the mybot SDK is stopped. The native
+480x640 panel is rendered as a 640x480 logical RGB565 surface. GPIO20 enables the 3.3 V rail,
+GPIO29 enables the shared LCD/camera 2.8 V rail, GPIO42 drives reset, and the GPIO40 backlight is
+active low. The LCD owner keeps the shared rail on; conversation/video teardown resets the sensor
+without cutting display power.
 
 The renderer adapts the shared `mybot-esp32` LVGL status view to the pinned AVDK LVGL 9.5.0
 component. It covers all mybot workflow screens, pairing codes, Chinese and English text,
@@ -282,6 +349,10 @@ pending states may coalesce into the newest state. SDK LCD init/destroy only att
 from the product-owned display, so the UI task remains available for APSTA provisioning after the
 SDK stops. Cross-thread and display-completion state uses the BK7259 AOSL atomic interfaces.
 
+Factory-reset restoring, failed, and rebooting pages use the same worker and support both
+languages. The product reset status takes precedence over SDK workflow rendering, including SDK
+stop/detach updates, until reboot.
+
 LVGL renders native RGB565 strips. The BK7259 backend rotates each changed rectangle into a free
 full-frame buffer, preserves unchanged pixels from the previous frame, and submits through the
 direct DSI bus, panel, and DPU APIs. A submitted frame is reused only after DPU's completion
@@ -292,8 +363,8 @@ The display memory budget is separate from the audio/video pipeline:
 
 | Allocation | Size | Region |
 | --- | --- | --- |
-| Two 320x385 RGB565 scanout buffers | 2 x 246400 = 492800 bytes | Uncached media frame slab |
-| One 385x16 RGB565 draw strip | 12320 bytes | HSRAM |
+| Two 480x640 RGB565 scanout buffers | 2 x 614400 = 1228800 bytes | Uncached media frame slab |
+| One 640x16 RGB565 draw strip | 20480 bytes | HSRAM |
 | UI task stack | 8192 bytes | HSRAM |
 | Temporary LVGL draw layers | 16 KiB preferred layer size; 64 KiB aggregate limit | HSRAM |
 | LVGL objects, styles, draw tasks, and RTOS control objects | Additional runtime allocations; peak requires target measurement | HSRAM / RTOS heaps |
@@ -301,12 +372,34 @@ The display memory budget is separate from the audio/video pipeline:
 `projects/mybot/ap/lv_conf_custom.h` selects `LV_USE_OS=LV_OS_NONE`, one software draw unit,
 100 ms refresh, and HSRAM for LVGL's internal allocations. The 64 KiB draw-layer limit is not a
 limit on total UI memory. Four constant 64x64 ARGB8888 emoji images occupy 65536 pixel bytes in
-Flash, alongside the fixed UI font and LVGL's built-in fonts. The 20-pixel UI font covers ASCII
-and the fixed Chinese UI vocabulary; arbitrary Chinese SSIDs or chat text need an extended font.
+Flash, alongside the fixed UI font and LVGL's built-in fonts. The 20-pixel UI font contains 170
+glyphs covering ASCII and the fixed Chinese UI vocabulary, including reset status text; arbitrary
+Chinese SSIDs or chat text need an extended font.
 This font replaces the previous direct-renderer glyph subset. Resource provenance and licenses
 are recorded in [display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md).
 Build results, host tests and remaining hardware checks are recorded in
 [UI_VALIDATION.md](bk_solution_ai/projects/mybot/UI_VALIDATION.md).
+
+## Audio
+
+R2 capture reads three differential analog ADC lanes: ADC0/ADC1 are microphones with analog gain
+20 and digital gain 16 dB; ADC2 carries the HT6872 amplifier feedback with both gains set to zero.
+Digital microphones and the ADC stream's appended AEC reference are disabled (`dmic_en=0`,
+`adc_cfg.aec_en=0`). AEC remains enabled in the next pipeline stage:
+
+```text
+ADC0 MIC + ADC1 MIC + ADC2 amplifier reference
+  -> aec_v3_algorithm_v2 (hardware AEC, in-channel reference ADC2, dual-mic processing)
+  -> raw stream -> 16 kHz mono signed 16-bit PCM -> MyBot RTC uplink
+```
+
+The AEC stage uses three ADC channels, `dual_ch=1`, traditional noise suppression, and no VAD.
+The main output includes AEC, microphone processing, and noise suppression. Speaker playback uses
+the onboard DAC stream and the active-high GPIO50 amplifier enable. Volume maps 0-100 to speaker
+digital gain and is synchronously saved as `mybot.volume.v1` when changed. A failed save is retried
+on a later set or adapter destruction. The board has no dedicated volume keys. Reset clears that
+record after the adapter's final persistence attempt, so subsequent startup uses the speaker
+default. Audio and AEC have passed user device testing.
 
 ## Video uplink
 
@@ -315,10 +408,11 @@ The current AP build provides an uplink-only H.264 path: the `1280x720` MIPI CSI
 complete access units through the high-quality Agora RTSA stream. The device does not receive or
 render remote video; its audio path remains full duplex.
 
-Starting mybot initializes the video context but leaves the camera and encoder off. They are powered
+Starting mybot initializes the video context but leaves the camera and encoder off. They are opened
 and started only after RTC reports a connected session. Conversation teardown stops the video
-worker, encoder, camera, and camera rail before leaving RTC; full SDK shutdown also stops and
-destroys the source as a fallback. RTSA bandwidth-estimation callbacks update the encoder target
+worker, encoder, and camera before leaving RTC; the sensor is reset while the LCD keeps the shared
+2.8 V rail powered. Full SDK shutdown also stops and destroys the source as a fallback. RTSA
+bandwidth-estimation callbacks update the encoder target
 bitrate, clamped to `256000`-`512000` bits per second; the initial target is `384000` bits per second.
 An RTSA key-frame request forces an IDR frame.
 
@@ -342,8 +436,12 @@ typing the address. The DNS half is the `bk_avdk_smp` fix on the branch above; t
 the portal. A regular AP is unaffected, because the rewrite only happens while the SoftAP's own DNS
 server is enabled.
 
-There is no key-triggered reprovisioning path in this product build. Initial provisioning remains
-automatic when no usable saved Wi-Fi credentials exist; the portal completes before the SDK starts.
+Initial provisioning is automatic when no usable saved Wi-Fi credentials exist; the portal
+completes before the SDK starts. A five-second key hold cancels network setup for factory reset,
+then clears credentials and reboots into provisioning. STA/scan waits and portal socket waits
+observe reset cancellation. Failed driver teardown retains ownership so a later reset attempt can
+retry. A cancellation return hands control back to the product task, which checks network teardown
+again before deleting records; it is not a guarantee that every driver has already stopped.
 
 ## Embedded voice assets
 
@@ -372,10 +470,9 @@ PCM.
   upstream snapshot.
 - Vendored AOSL is locked to its recorded base and content digest, including the five declared
   BK7259 HAL modifications.
-- `bk_avdk_smp` is consumed at `release/v4.0.1-mybot`, which is upstream `release/v4.0.1` plus this
-  product's SDK-side fixes — today the captive-portal DNS server in the DHCP component, on both
-  cores. The port adds no other tracked change to it, and mybot audio, video, APSTA, and display
-  integration use only its public component APIs.
+- `bk_avdk_smp` is consumed at `release/v4.0.1-mybot-r2`, which adds the product's captive-portal
+  DNS changes and GC9503CV R2 MIPI panel support to upstream `release/v4.0.1`. Mybot audio, video,
+  APSTA, and display integration use its public component APIs.
 - BK platform sources include mybot only through `<mybot/platform/...>`.
 - `projects/mybot/ap/ap_main.c` is the sole application lifecycle consumer of the public
   `<mybot/mybot.h>` API, and the only product source that includes the public
@@ -415,13 +512,18 @@ submodule.
   accepted by both before claiming end-to-end RTM.
 - Hardware volume and local announcements are enabled in the minimal descriptor. The volume is
   persisted in EasyFlash and the announcement assets are embedded as Ogg/Opus in
-  `projects/mybot/assets/`; wake words remain disabled.
+  `projects/mybot/assets/`; factory reset clears saved volume. The R2 board has no volume keys;
+  wake words remain disabled.
 - The encoded video path is configured for 5 fps, but its sustained frame cadence, bitrate
   adaptation, key-frame/GOP behavior, and repeated session start/stop still require runtime
   verification on the target camera hardware.
-- The LVGL UI still requires target verification for panel rotation/colors, both languages,
-  repeated SDK stop/start, and HSRAM/stack peaks with simultaneous audio and video.
+- R2 LCD bring-up and conversation start/stop without a blank screen passed user device testing.
+  Both UI languages, extended SDK stop/start cycling, and HSRAM/stack peaks with simultaneous
+  audio and video still need dedicated target validation.
 - The single GPIO key is based on the Yunqu V1.0 KEY1/GPIO47 connection.
+- The five-second factory-reset feature passed user device testing. Power-interruption and
+  injected shutdown/storage failures still need target-specific validation; host fault-injection
+  coverage is recorded in [UI_VALIDATION.md](bk_solution_ai/projects/mybot/UI_VALIDATION.md).
 
 ## Documentation
 
