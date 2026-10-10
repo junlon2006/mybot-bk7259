@@ -211,8 +211,8 @@ GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移
 
 - `CONFIG_MYBOT_LANGUAGE_ZH_CN`：中文服务区域、LCD 文案与提示音资源。
 - `CONFIG_MYBOT_LANGUAGE_EN_US`：英文服务区域、LCD 文案与提示音资源。
-- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`：最高 10 fps 的状态动画，默认启用。
-- `CONFIG_MYBOT_LVGL_UI_LIGHT_THEME`：浅色 UI 主题，默认关闭并使用深色主题。
+- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`：像素表情切换过渡、表情动态效果与 500 ms 光标闪烁，默认启用；
+  UI 固定采用工艺灰风格。
 - `CONFIG_MYBOT_VIDEO`：启用编码视频上行，参考固件中已设为 `y`。
 - `CONFIG_MYBOT_VIDEO_WIDTH` / `CONFIG_MYBOT_VIDEO_HEIGHT`：ISP 编码输出，参考值为
   `640x480`。
@@ -300,13 +300,44 @@ GPIO20 控制 3.3V 供电，GPIO29 控制 LCD/摄像头共用的 2.8V 电源，G
 GPIO40 背光低有效。共用 2.8V 电源由显示持有到平台关闭；结束视频只复位摄像头，
 不会关闭该电源导致屏幕变黑。
 
-渲染器将 `mybot-esp32` 的共享 LVGL 状态视图适配到锁定版本的 AVDK LVGL 9.5.0，覆盖全部
-mybot 工作流界面、配对码、中英文文案、声纹注册，以及服务端互斥的 `listening`、
-`thinking`、`speaking` 状态。状态卡片配有静态表情与轻量状态动画，就绪提示对应对话按键。
-GPU 和触摸保持关闭；该状态 UI 不显示摄像头预览。
+LVGL 9.5.0 渲染器采用用户提供模拟器的 `process`（工艺灰）皮肤与 `geek`（像素眼镜）画法，
+使用 `#050708` 固定黑色玻璃底与灰色装饰，避免 RGB565 深色渐变色带。实际进入 `READY` 时显示“中性待机”：
+`#f1f1ee` 米白镜框、双弧眼和微笑；进入 `IN_CONVERSATION` 时切换“打招呼”：
+`#f1ca79` 暖金镜框、左弧眼、右圆点眼和微笑。这是默认映射，挂断后回到中性待机。
+Wi-Fi 配网成功后仍按 SDK 流程完成鉴权与配对，只有实际达到 `READY` 才显示待机表情。
 
-布局为屏幕圆角预留安全区域：页眉左右各内收 40 像素、距顶部 14 像素；底栏左右各内收
-32 像素、距底部 18 像素。
+正常待机和会话界面恢复模拟器的四行终端文字：
+
+```text
+> OIM / R2
+> mood: neutral
+> state: online
+> agora / realtime
+```
+
+`mood` 随当前表情显示小写名称；`state` 在 `SLEEP` 时显示 `standby`，其余表情为 `online`。
+`</>` 签名和最后一行的光标保留。这些文字是视觉装饰，不代表连接状态或 SDK 状态。
+声纹和服务端 `listening`、`thinking`、`speaking` 事件继续由 SDK 处理，
+不再改变表情或弹出状态提示。启动、配网、网页控制台配对、错误和恢复出厂仍保留必要的
+中英文引导。GPU 与触摸关闭，不显示摄像头预览，也不控制云台动作。
+
+模拟器全部 23 个表情通过独立模块
+[bk7259_expression.h](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/include/bk7259_expression.h)
+提供。`bk7259_lcd_set_expression()` 复制请求到显示所有者，
+`bk7259_lcd_clear_expression()` 恢复当前流程的默认表情。仅 `READY`/`IN_CONVERSATION`
+表情页面接受覆盖，流程页面切换时清除覆盖；配网等操作引导与恢复出厂保持优先，
+仅 indicator 更新则保留已选表情。新增 21 个表情先供后续集成，没有自动轮播、
+MCP/RTM 命令映射或 UART 动作。完整列表和调用示例见
+[工程说明](bk_solution_ai/projects/mybot/README_CN.md#6-r2-音频与显示)。
+
+模拟器的 1024x896 画布按 9/16 等比缩放为 576x504 虚拟区域，位于 640x480 逻辑屏幕的
+`(32,-12)`，上下只裁去空白，表情和文字保持在屏幕圆角安全区内。眼镜总宽约 345 像素；
+终端文字保留参考的 37 像素源坐标行距，`</>` 左对齐。镜框、眼睛和嘴巴由固定 LVGL 控件与采样曲线绘制，
+心形、星形、椭圆、腮红和泪滴使用五块小型只读 A8 抗锯齿蒙版，合计 13631 字节 Flash，消除三角扇接缝。
+蒙版由参考几何在本地生成，不使用完整表情图片，不增加 canvas 整帧缓冲或 UI 任务。
+生成和复现方法见 [display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md#geometry-masks)。
+开启动画时，表情切换使用短过渡并保留表情动态效果，光标每 500 ms
+闪烁；仅 indicator 更新不会重播过渡。
 
 SDK 的 render 调用将内容复制到一个保存最新状态的 mailbox，并唤醒 `mybot_ui` 任务。
 只有该任务更新运行中的视图、执行 LVGL timer 和刷屏；来不及处理的中间状态可以合并为
@@ -331,12 +362,15 @@ LVGL 生成原生 RGB565 条带，BK7259 后端将变化区域旋转写入空闲
 | LVGL 临时绘制层 | 单层优选 16 KiB；总量上限 64 KiB | HSRAM |
 | LVGL 对象、样式、绘制任务与 RTOS 控制对象 | 额外动态分配，峰值需目标机测量 | HSRAM / RTOS 堆 |
 
-`projects/mybot/ap/lv_conf_custom.h` 选择 `LV_USE_OS=LV_OS_NONE`、单软件绘制单元、100 ms
+`projects/mybot/ap/lv_conf_custom.h` 选择 `LV_USE_OS=LV_OS_NONE`、单软件绘制单元、50 ms
 刷新间隔，并用 HSRAM 分配 LVGL 内部对象。64 KiB 只限制绘制层，不是 UI 总内存上限。
 构建结果、宿主测试和待上板检查项见
 [UI_VALIDATION.md](bk_solution_ai/projects/mybot/UI_VALIDATION.md)。
-四张常量 64x64 ARGB8888 表情共占 65536 字节 Flash 像素数据，另外还有固定 UI 字库和
-LVGL 内置字体。20 像素 UI 字库现含 170 个字符，覆盖 ASCII、配对及恢复出厂中文文案；任意中文 SSID 或聊天内容需要
+像素表情复用现有显示任务、绘制条带和两块扫描缓冲；旧四张 64x64 emoji 资源保留历史源码，
+不再链接到固件。终端装饰使用只读 BK7259 Terminal 位图字库：15 像素 ASCII 与 16 像素 `</>`
+子集，合计 4634 字节位图；它们由 DejaVu Sans Mono Bold 生成，替代 Unscii 16，按 LVGL 实际
+字宽贴近参考的缩放文字比例，光标按实际字宽定位。操作引导使用 20 像素 MyBot UI Sans。
+UI 字库现含 152 个字符，覆盖 ASCII、配对及恢复出厂中文文案；任意中文 SSID 或聊天内容需要
 扩充字库。新字库替代原先直接渲染的字形子集。资源来源与许可证记录在
 [display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)。
 
@@ -452,9 +486,9 @@ git diff --submodule=log
   Ogg/Opus 内嵌在 `projects/mybot/assets/`；唤醒词仍关闭。
 - 编码视频链路已配置为 5 fps，但持续出帧节奏、码率自适应、关键帧/GOP 行为和重复会话
   start/stop 仍需在目标摄像头硬件上完成运行时验证。
-- R2 屏幕、结束会话后屏幕保持点亮、双模拟麦上行和 AEC、长按恢复出厂已由用户反馈
-  真机测试通过。中英文固件编译通过，恢复流程已做宿主故障注入；断电续做、Flash/驱动
-  故障、长时间运行及同时音视频的 HSRAM 和栈峰值仍需专项真机验证。
+- R2 屏幕、结束会话后屏幕保持点亮、双模拟麦上行和 AEC、长按恢复出厂及像素眼镜基础渲染
+  已由用户反馈真机测试通过。四行文字与完整 23 表情尚待用户上板验证；中英文画面、表情过渡、
+  断电续做、Flash/驱动故障、长时间运行及同时音视频的 HSRAM 和栈峰值仍需专项真机验证。
 - 单个 GPIO 按键采用耘趣 V1.0 的 KEY1/GPIO47 输入配置，CEN 保留硬件复位功能。
 
 ## 文档
@@ -492,7 +526,7 @@ git diff --submodule=log
 - [AOSL 许可证及附加条款](bk_solution_ai/components/mybot/mybot_aosl/aosl/LICENSE)
 - [提示音资源许可证](bk_solution_ai/projects/mybot/assets/LICENSE.xiaozhi-esp32)
 - [LVGL 许可证](bk_avdk_smp/ap/components/lvgl/LICENCE.txt)
-- [LVGL 视图、字体和表情来源](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)
+- [LVGL 视图、字体和模拟器来源](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)
 - [BK7259 第三方声明](bk_solution_ai/components/mybot/mybot_sdk/THIRD_PARTY_NOTICES.md)
 - [mybot 第三方声明](https://github.com/junlon2006/mybot/blob/main/THIRD_PARTY_NOTICES.md)
 

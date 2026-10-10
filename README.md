@@ -236,8 +236,8 @@ The `MyBot BK7259 platform` Kconfig menu provides:
 
 - `CONFIG_MYBOT_LANGUAGE_ZH_CN`: Chinese service region, LCD text, and prompt assets.
 - `CONFIG_MYBOT_LANGUAGE_EN_US`: English service region, LCD text, and prompt assets.
-- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`: status animations at up to 10 fps, enabled by default.
-- `CONFIG_MYBOT_LVGL_UI_LIGHT_THEME`: light UI theme; disabled by default for the dark theme.
+- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`: pixel-face transitions, expression motion, and the 500 ms terminal cursor,
+  enabled by default. The UI uses the fixed process-gray appearance.
 - `CONFIG_MYBOT_VIDEO`: encoded H.264 video uplink; it is enabled in the current AP build.
 - `CONFIG_MYBOT_VIDEO_WIDTH` / `CONFIG_MYBOT_VIDEO_HEIGHT`: `640x480` encoded output.
 - `CONFIG_MYBOT_VIDEO_SENSOR_WIDTH` / `CONFIG_MYBOT_VIDEO_SENSOR_HEIGHT` /
@@ -337,15 +337,54 @@ GPIO29 enables the shared LCD/camera 2.8 V rail, GPIO42 drives reset, and the GP
 active low. The LCD owner keeps the shared rail on; conversation/video teardown resets the sensor
 without cutting display power.
 
-The renderer adapts the shared `mybot-esp32` LVGL status view to the pinned AVDK LVGL 9.5.0
-component. It covers all mybot workflow screens, pairing codes, Chinese and English text,
-voiceprint registration, and the server's mutually exclusive `listening`, `thinking`, and
-`speaking` indicators. Static emoji and lightweight status animations accompany the state cards.
-The ready hint matches the conversation button. GPU and touch remain disabled; this status UI
-does not display a camera preview.
+The LVGL 9.5.0 renderer follows the user-supplied simulator's `process` (process gray) skin and
+`geek` (pixel glasses) face. It uses a fixed `#050708` black glass background and gray decorations,
+avoiding visible dark-gradient banding in RGB565.
+`READY` shows the neutral idle face: off-white `#f1f1ee` glasses, two curved eyes, and a smile.
+Entering `IN_CONVERSATION` switches to the greeting face: warm-gold `#f1ca79` glasses, a curved
+left eye, a round right eye, and a smile. These are the default faces; hangup returns to neutral.
+Wi-Fi setup alone does not bypass authentication or pairing: the
+idle face appears only when the SDK actually reaches `READY`.
 
-The layout reserves space for the rounded bezel: the header is inset 40 pixels horizontally
-and 14 from the top; the footer is inset 32 pixels horizontally and 18 from the bottom.
+Normal idle and conversation screens retain the simulator's four terminal rows:
+
+```text
+> OIM / R2
+> mood: neutral
+> state: online
+> agora / realtime
+```
+
+The mood follows the selected expression in lowercase; state is `standby` for `SLEEP` and
+`online` for the other faces. The `</>` signature and last-row cursor remain. These are visual
+decorations, not connectivity or SDK state reports. Voiceprint and
+`listening`/`thinking`/`speaking` indicators remain SDK events but do not alter the face or show
+status overlays. Chinese and English startup, provisioning, web-console pairing, error, and
+factory-reset instructions remain available. GPU and touch stay disabled, and the display does
+not show a camera preview or control gimbal movement.
+
+All 23 simulator expressions are available through the independent
+[bk7259_expression.h](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/include/bk7259_expression.h)
+module. `bk7259_lcd_set_expression()` copies a request to the display owner;
+`bk7259_lcd_clear_expression()` restores the current workflow's default face. Overrides are accepted
+only on `READY`/`IN_CONVERSATION` pages and are cleared by workflow screen changes. Factory-reset
+and operating guidance retain priority, while indicator-only updates retain the selected face.
+The additional 21 expressions are prepared for later integration; there is no automatic cycling,
+MCP/RTM command mapping, or UART action. Names, examples, and visual mappings are in the
+[project guide](bk_solution_ai/projects/mybot/README.md#6-r2-audio-and-display).
+
+The simulator's 1024x896 artwork is scaled uniformly by 9/16 to a virtual 576x504 area at logical
+position `(32,-12)` on the 640x480 display. Only empty canvas space is cropped at the top and
+bottom; the face and text remain inside the display's rounded-bezel safe area. The glasses span
+about 345 pixels. Terminal rows retain the reference's 37-pixel source grid, and the `</>`
+signature is left-aligned. Fixed LVGL widgets and sampled curves draw the glasses, eyes, and mouth.
+Five small immutable A8 masks (13631 bytes in Flash) render filled hearts, stars, ellipses, cheeks, and tears without
+triangle-fan seams. They are generated locally from the reference geometry; no full-face images,
+additional canvas framebuffer, or UI task are required. The generator and reproduction command
+are documented in [display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md#geometry-masks).
+With animations enabled, face
+changes use a short transition, animated expressions retain their motion, and the cursor blinks every 500 ms. Indicator-only updates do
+not restart the transition.
 
 SDK render calls copy their content into one latest-state mailbox and wake the `mybot_ui` task.
 That task alone updates the live view, advances LVGL timers, and flushes pixels. Intermediate
@@ -374,10 +413,15 @@ The display memory budget is separate from the audio/video pipeline:
 | LVGL objects, styles, draw tasks, and RTOS control objects | Additional runtime allocations; peak requires target measurement | HSRAM / RTOS heaps |
 
 `projects/mybot/ap/lv_conf_custom.h` selects `LV_USE_OS=LV_OS_NONE`, one software draw unit,
-100 ms refresh, and HSRAM for LVGL's internal allocations. The 64 KiB draw-layer limit is not a
-limit on total UI memory. Four constant 64x64 ARGB8888 emoji images occupy 65536 pixel bytes in
-Flash, alongside the fixed UI font and LVGL's built-in fonts. The 20-pixel UI font contains 170
-glyphs covering ASCII and the fixed Chinese UI vocabulary, including reset status text; arbitrary
+50 ms refresh, and HSRAM for LVGL's internal allocations. The 64 KiB draw-layer limit is not a
+limit on total UI memory. The pixel face reuses the existing worker, draw strip, and two scanout
+buffers. The old four 64x64 emoji assets remain as historical source resources but are no longer
+linked into the firmware. Terminal decorations use the read-only BK7259 Terminal bitmap subsets:
+15-pixel ASCII and a 16-pixel `</>` signature, totaling 4634 bitmap bytes. These compact DejaVu
+Sans Mono Bold derivatives replace Unscii 16; their actual LVGL text advances match the reference's
+scaled text proportions closely. The cursor follows the actual text width. Chinese and English
+operational instructions use the 20-pixel MyBot UI Sans font. The UI font contains 152 glyphs
+covering ASCII and the fixed Chinese UI vocabulary, including reset status text; arbitrary
 Chinese SSIDs or chat text need an extended font.
 This font replaces the previous direct-renderer glyph subset. Resource provenance and licenses
 are recorded in [display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md).
@@ -521,9 +565,10 @@ submodule.
 - The encoded video path is configured for 5 fps, but its sustained frame cadence, bitrate
   adaptation, key-frame/GOP behavior, and repeated session start/stop still require runtime
   verification on the target camera hardware.
-- R2 LCD bring-up and conversation start/stop without a blank screen passed user device testing.
-  Both UI languages, extended SDK stop/start cycling, and HSRAM/stack peaks with simultaneous
-  audio and video still need dedicated target validation.
+- R2 LCD bring-up, conversation start/stop without a blank screen, and basic pixel-glasses rendering
+  passed user device testing. The four-line layout and full 23-expression set still need user device testing. Both UI languages,
+  face transitions, extended SDK stop/start cycling, and HSRAM/stack peaks with simultaneous audio
+  and video need dedicated target validation.
 - The single GPIO key is based on the Yunqu V1.0 KEY1/GPIO47 connection.
 - The five-second factory-reset feature passed user device testing. Power-interruption and
   injected shutdown/storage failures still need target-specific validation; host fault-injection
@@ -567,7 +612,7 @@ terms of use, including but not limited to:
 - [AOSL license and additional terms](bk_solution_ai/components/mybot/mybot_aosl/aosl/LICENSE)
 - [Prompt asset license](bk_solution_ai/projects/mybot/assets/LICENSE.xiaozhi-esp32)
 - [LVGL license](bk_avdk_smp/ap/components/lvgl/LICENCE.txt)
-- [LVGL view, font, and emoji provenance](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)
+- [LVGL view, font, and simulator provenance](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)
 - [BK7259 third-party notices](bk_solution_ai/components/mybot/mybot_sdk/THIRD_PARTY_NOTICES.md)
 - [mybot third-party notices](https://github.com/junlon2006/mybot/blob/main/THIRD_PARTY_NOTICES.md)
 
