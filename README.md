@@ -251,8 +251,13 @@ The `MyBot BK7259 platform` Kconfig menu provides:
 - The ADC channel, both voltage window bounds, and the function of each button.
 
 The language option selects the LCD text, service region, and prompt asset directory: Chinese
-(`https://mybot.sh2.agoralab.co/api`) or English (`https://mybot.sg3.agoralab.co/api`). Exactly one
+(`https://botstation.shengwang.cn/api`) or English (`https://botstation.agora.io/api`). Exactly one
 of the two language options must be enabled.
+
+The language choice also selects exactly one embedded HTTPS root: DigiCert Global Root G2
+for the Chinese service, or Go Daddy Root Certificate Authority - G2 for the overseas service.
+Each connection parses only that root, reducing certificate storage and per-connection heap use.
+Certificate-chain and hostname validation remain required.
 
 Everything else about the device identity is fixed by the port rather than configured:
 [ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c) derives the device id at runtime from the

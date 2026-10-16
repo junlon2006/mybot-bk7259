@@ -228,8 +228,12 @@ GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移
 - 每个按键的 ADC 通道、电压窗口上下界和对应功能。
 
 语言选项同时决定 LCD 文案、服务区域和提示音资源目录：中文
-（`https://mybot.sh2.agoralab.co/api`）或英文（`https://mybot.sg3.agoralab.co/api`）。
+（`https://botstation.shengwang.cn/api`）或英文（`https://botstation.agora.io/api`）。
 两个语言选项必须且只能启用一个。
+
+语言选项同时选择唯一内嵌的 HTTPS 根证书：国内版使用 DigiCert Global Root G2，
+海外版使用 Go Daddy Root Certificate Authority - G2。每次连接只解析所选的一张证书，
+减少证书存储和每连接堆内存开销；继续强制校验证书链和主机名。
 
 设备身份不由配置决定：[ap_main.c](bk_solution_ai/projects/mybot/ap/ap_main.c) 在运行时
 读取由 CP 提供的芯片唯一 UID，使用 HMAC-SHA256 和 `mybot-bk7259-device-id-v1` 派生密钥，
