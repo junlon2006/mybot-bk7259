@@ -97,9 +97,9 @@ The SDK accepts RTM DeviceCommand v1 for volume set/adjust, playback mute, and f
 It checks sender, channel, conversation and generation, and deduplicates the latest 16 distinct
 command IDs in FIFO order. `issued_at` and `expires_at` are optional and ignored; commands do not
 depend on a UTC clock. Volume commands use the existing audio-volume adapter and mute silences
-speaker PCM. The current status-card renderer handles voiceprint/server-state bits 0-3 and
-ignores emotion bits 4-7; emotion rendering belongs to the subsequent UI change. This SDK refresh
-keeps the old-board UI renderer, AVDK and board configuration intact.
+speaker PCM. The pixel-glasses renderer handles voiceprint/server-state bits 0-3 and uses
+emotion bits 4-7 for one-shot LCD expressions. These display requests do not control motors.
+The SDK synchronization was committed separately before the UI update.
 
 The existing BK7259 target patch still logs HTTPS request and response bodies. `SDK_REVISION`
 records the selected commit, declared patch, and deterministic `include/` and `src/` digest.
@@ -239,8 +239,9 @@ The `MyBot BK7259 platform` Kconfig menu provides:
 
 - `CONFIG_MYBOT_LANGUAGE_ZH_CN`: Chinese service region, LCD text, and prompt assets.
 - `CONFIG_MYBOT_LANGUAGE_EN_US`: English service region, LCD text, and prompt assets.
-- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`: status animations at up to 10 fps, enabled by default.
-- `CONFIG_MYBOT_LVGL_UI_LIGHT_THEME`: light UI theme; disabled by default for the dark theme.
+- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`: pixel-glasses and transition animations, enabled by default.
+- `CONFIG_MYBOT_LVGL_UI_LIGHT_THEME`: retained for configuration compatibility; the pixel renderer
+  always uses its fixed process-gray skin.
 - `CONFIG_MYBOT_VIDEO`: encoded H.264 video uplink; it is enabled in the current AP build.
 - `CONFIG_MYBOT_VIDEO_WIDTH` / `CONFIG_MYBOT_VIDEO_HEIGHT`: `640x480` encoded output.
 - `CONFIG_MYBOT_VIDEO_SENSOR_WIDTH` / `CONFIG_MYBOT_VIDEO_SENSOR_HEIGHT` /
@@ -292,16 +293,30 @@ The product owns one JD9855 MIPI display from platform preparation through platf
 Wi-Fi provisioning remains visible while the mybot SDK is stopped. The native 320x385 panel is
 rendered as a 385x320 logical RGB565 surface. GPIO53 enables panel power, GPIO5 drives reset, and
 the GPIO7 backlight is active low.
+The panel has pronounced rounded corners. The layout reserves a conservative visible safe area
+for terminal text, pairing codes and the main glasses artwork; the hardware corner radius has
+not been measured precisely.
 
-The renderer adapts the shared `mybot-esp32` LVGL status view to the pinned AVDK LVGL 9.5.0
-component. It covers all mybot workflow screens, pairing codes, Chinese and English text,
-voiceprint registration, and the server's mutually exclusive `listening`, `thinking`, and
-`speaking` indicators. Static emoji and lightweight status animations accompany the state cards.
-The ready hint matches the conversation button. GPU and touch remain disabled; this status UI
-does not display a camera preview.
+The LVGL 9.5.0 renderer replaces the previous status cards with the simulator's `process`
+(process-gray) skin and `geek` pixel glasses, adapted to this board's 385x320 logical screen.
+A fixed `#050708` black-glass background, off-white neutral glasses and gray decorations keep
+the artwork consistent in RGB565. Four terminal rows show the selected mood and real runtime
+state; conversation text includes the server phase and voiceprint-registration status.
+The artwork scales uniformly to 346x302, with 9-pixel terminal text and a 10-pixel signature.
+Pairing codes are exactly six digits, displayed at a fixed 32-pixel size.
+Startup, provisioning, web-console pairing and errors retain bilingual guidance;
+factory reset keeps the original board's workflow.
+GPU and touch remain disabled; there is no camera preview.
 
-The layout reserves space for the rounded bezel: the header is inset 40 pixels horizontally
-and 14 from the top; the footer is inset 32 pixels horizontally and 18 from the bottom.
+READY shows NEUTRAL. Entering a conversation shows SURPRISED for 300 ms after its entering
+transition. LISTENING then selects its face; continuous THINKING selects PROCESSING after
+three seconds; SPEAKING or no active phase selects NEUTRAL. New accepted MCP emotion commands
+temporarily replace the current face, including a replay for a new command with the same name.
+HAPPY, SAD, ANGRY and SURPRISED map to HAPPY, SAD, ANNOYED and SURPRISED, held for
+2 s, 3 s, 1.2 s and 0.8 s respectively. An enabled entering transition adds 250 ms to each
+hold, including the conversation opener. Expiry restores the latest automatic phase face;
+hangup restores NEUTRAL. The 23-expression list and local display API are in the
+[project guide](bk_solution_ai/projects/mybot/README.md#5-display-and-expressions).
 
 SDK render calls copy their content into one latest-state mailbox and wake the `mybot_ui` task.
 That task alone updates the live view, advances LVGL timers, and flushes pixels. Intermediate
@@ -326,11 +341,10 @@ The display memory budget is separate from the audio/video pipeline:
 | LVGL objects, styles, draw tasks, and RTOS control objects | Additional runtime allocations; peak requires target measurement | HSRAM / RTOS heaps |
 
 `projects/mybot/ap/lv_conf_custom.h` selects `LV_USE_OS=LV_OS_NONE`, one software draw unit,
-100 ms refresh, and HSRAM for LVGL's internal allocations. The 64 KiB draw-layer limit is not a
-limit on total UI memory. Four constant 64x64 ARGB8888 emoji images occupy 65536 pixel bytes in
-Flash, alongside the fixed UI font and LVGL's built-in fonts. The 20-pixel UI font covers ASCII
-and the fixed Chinese UI vocabulary; arbitrary Chinese SSIDs or chat text need an extended font.
-This font replaces the previous direct-renderer glyph subset. Resource provenance and licenses
+and HSRAM for LVGL's internal allocations. The 64 KiB draw-layer limit is not a limit on total
+UI memory. Fixed LVGL objects, sampled curves and small masks draw the pixel face. Terminal
+fonts and a fixed Chinese UI glyph subset cover product guidance; arbitrary Chinese SSIDs or
+chat text need an extended font. Resource provenance and licenses
 are recorded in [display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md).
 Build results, host tests and remaining hardware checks are recorded in
 [UI_VALIDATION.md](bk_solution_ai/projects/mybot/UI_VALIDATION.md).

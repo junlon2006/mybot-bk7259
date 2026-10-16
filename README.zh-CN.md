@@ -85,8 +85,8 @@ RTC/RTM状态处理及日志门限修复。
 SDK支持通过RTM接收DeviceCommand v1的音量设置/增减、播放静音和四种表情命令，校验
 发送方、频道、会话及代次，并按FIFO对最近16个不同command ID去重。`issued_at`及
 `expires_at`可省略或提供但均忽略，不依赖UTC时钟。音量命令复用已有音量适配，静音清零
-扬声器PCM。当前旧版状态卡片UI处理声纹/服务端阶段bit 0-3，忽略情绪bit 4-7；表情渲染
-留待后续UI修改。本次SDK同步保持旧硬件UI渲染器、AVDK和板级配置不变。
+扬声器PCM。像素眼镜UI处理声纹/服务端阶段bit 0-3，将情绪bit 4-7映射为一次性LCD表情，
+不控制电机。SDK同步已在本次UI修改之前独立提交。
 
 原有BK7259目标patch继续打印HTTPS请求与响应body，`SDK_REVISION`记录所选提交、已声明补丁
 及`include/`、`src/`的确定性聚合摘要。AOSL 基线为 commit
@@ -216,8 +216,8 @@ GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移
 
 - `CONFIG_MYBOT_LANGUAGE_ZH_CN`：中文服务区域、LCD 文案与提示音资源。
 - `CONFIG_MYBOT_LANGUAGE_EN_US`：英文服务区域、LCD 文案与提示音资源。
-- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`：最高 10 fps 的状态动画，默认启用。
-- `CONFIG_MYBOT_LVGL_UI_LIGHT_THEME`：浅色 UI 主题，默认关闭并使用深色主题。
+- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`：像素眼镜及切换动画，默认启用。
+- `CONFIG_MYBOT_LVGL_UI_LIGHT_THEME`：保留旧配置兼容，新像素渲染器固定使用工艺灰皮肤。
 - `CONFIG_MYBOT_VIDEO`：启用编码视频上行，参考固件中已设为 `y`。
 - `CONFIG_MYBOT_VIDEO_WIDTH` / `CONFIG_MYBOT_VIDEO_HEIGHT`：ISP 编码输出，参考值为
   `640x480`。
@@ -263,14 +263,22 @@ EasyFlash 或 Wi-Fi 时进行。擦除会清空 EasyFlash 环境（其中保存 
 产品层从平台准备到平台关闭全程独占一块 JD9855 MIPI 屏，因此在 mybot SDK 停止期间配网
 界面依然可见。物理分辨率为 320x385，按 385x320 的逻辑 RGB565 画面渲染。GPIO53 控制屏
 供电，GPIO5 为复位，GPIO7 背光低有效。
+屏幕四角有明显圆弧，布局为终端文字、配对码及眼镜主体保留保守安全区，避免被实体圆角遮挡；
+未将照片估计值作为精确硬件圆角半径。
 
-渲染器将 `mybot-esp32` 的共享 LVGL 状态视图适配到锁定版本的 AVDK LVGL 9.5.0，覆盖全部
-mybot 工作流界面、配对码、中英文文案、声纹注册，以及服务端互斥的 `listening`、
-`thinking`、`speaking` 状态。状态卡片配有静态表情与轻量状态动画，就绪提示对应对话按键。
-GPU 和触摸保持关闭；该状态 UI 不显示摄像头预览。
+LVGL 9.5.0渲染器以模拟器的 `process`（工艺灰）皮肤与 `geek`（像素眼镜）替换旧状态卡片，
+适配本板385x320逻辑屏。固定 `#050708` 黑色玻璃底、米白中性镜框与灰色装饰保持RGB565
+画面一致；四行终端文字显示当前表情与真实运行状态，会话中显示服务端阶段及声纹注册状态。
+图案等比缩放至346x302，终端文字9px、签名10px；配对码固定为6位数字，使用固定32px字号。
+启动、配网、网页控制台配对和错误保留中英文引导，恢复出厂沿用旧板原流程。GPU和触摸关闭，不显示
+摄像头预览。
 
-布局为屏幕圆角预留安全区域：页眉左右各内收 40 像素、距顶部 14 像素；底栏左右各内收
-32 像素、距底部 18 像素。
+READY显示NEUTRAL；进入会话后SURPRISED保持300 ms，并另计进入过渡。随后LISTENING显示
+聆听，THINKING连续三秒后转PROCESSING，SPEAKING或无阶段时显示NEUTRAL。通过SDK校验及
+去重的新MCP表情命令覆盖当前表情，同名新命令也重播：HAPPY/SAD/ANGRY/SURPRISED分别显示
+HAPPY/SAD/ANNOYED/SURPRISED，保持2秒/3秒/1.2秒/0.8秒。开启动画时，每次保持另加进入的
+250 ms过渡，会话开场同样另计；到期恢复最新阶段表情，挂断回中性待机。全部23个表情与
+本地显示接口见[工程说明](bk_solution_ai/projects/mybot/README_CN.md#5-显示与表情)。
 
 SDK 的 render 调用将内容复制到一个保存最新状态的 mailbox，并唤醒 `mybot_ui` 任务。
 只有该任务更新运行中的视图、执行 LVGL timer 和刷屏；来不及处理的中间状态可以合并为
@@ -291,13 +299,12 @@ LVGL 生成原生 RGB565 条带，BK7259 后端将变化区域旋转写入空闲
 | LVGL 临时绘制层 | 单层优选 16 KiB；总量上限 64 KiB | HSRAM |
 | LVGL 对象、样式、绘制任务与 RTOS 控制对象 | 额外动态分配，峰值需目标机测量 | HSRAM / RTOS 堆 |
 
-`projects/mybot/ap/lv_conf_custom.h` 选择 `LV_USE_OS=LV_OS_NONE`、单软件绘制单元、100 ms
-刷新间隔，并用 HSRAM 分配 LVGL 内部对象。64 KiB 只限制绘制层，不是 UI 总内存上限。
+`projects/mybot/ap/lv_conf_custom.h` 选择 `LV_USE_OS=LV_OS_NONE`、单软件绘制单元，
+并用 HSRAM 分配 LVGL 内部对象。64 KiB 只限制绘制层，不是 UI 总内存上限。
 构建结果、宿主测试和待上板检查项见
 [UI_VALIDATION.md](bk_solution_ai/projects/mybot/UI_VALIDATION.md)。
-四张常量 64x64 ARGB8888 表情共占 65536 字节 Flash 像素数据，另外还有固定 UI 字库和
-LVGL 内置字体。20 像素 UI 字库覆盖 ASCII 与固定中文文案；任意中文 SSID 或聊天内容需要
-扩充字库。新字库替代原先直接渲染的字形子集。资源来源与许可证记录在
+像素表情由固定LVGL控件、采样曲线和小型蒙版绘制。终端字体与固定中文子集覆盖产品引导；
+任意中文SSID或聊天内容需要扩充字库。资源来源与许可证记录在
 [display/SOURCES.md](bk_solution_ai/components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)。
 
 ## 视频上行
