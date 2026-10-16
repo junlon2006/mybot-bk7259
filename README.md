@@ -87,15 +87,23 @@ remotes.
 - `mybot_rtsa` — the vendored Agora RTSA SDK (`include/` headers and
   `lib/arm/libagora-rtc-sdk.a`).
 
-The solution vendors the mybot SDK from upstream commit
-`064397882187a242be25a525a91df83d353b78bb` on `main` (SDK version 1.2.0). This snapshot adds
-nonblocking control-event delivery, re-pairing cancellation, prompt-generation tracking, and
-HTTP/JSON boundary fixes. It also includes serialized video control, deferred prompt teardown,
-unified RTM-to-LCD indicators, and the
-`RTC_LOG_ERROR` and AOSL log-gate preservation; the remaining BK7259 target patch records debug
-HTTPS request and response body logging in `SDK_REVISION`. It includes the RTM server-state LCD
-indicators and the video uplink contract, which the current BK7259 AP build enables. `SDK_REVISION` records the
-selected commit, target patch, and deterministic `include/` and `src/` digest. AOSL is based on commit
+The solution vendors the mybot SDK from upstream `main` commit
+`e7793eba88f721304dc00d421706d4d788b81a43` (SDK version 1.2.0). Binding polls and stop notifications
+run on a background service queue; local RTC/media teardown and state updates happen before the
+stop HTTP request. The snapshot retains nonblocking control delivery, prompt-generation tracking,
+HTTP/JSON boundary fixes, serialized video control, and the RTC/RTM state and log-gate fixes.
+
+The SDK accepts RTM DeviceCommand v1 for volume set/adjust, playback mute, and four emotions.
+It checks sender, channel, conversation and generation, and deduplicates the latest 16 distinct
+command IDs in FIFO order. `issued_at` and `expires_at` are optional and ignored; commands do not
+depend on a UTC clock. Volume commands use the existing audio-volume adapter and mute silences
+speaker PCM. The current status-card renderer handles voiceprint/server-state bits 0-3 and
+ignores emotion bits 4-7; emotion rendering belongs to the subsequent UI change. This SDK refresh
+keeps the old-board UI renderer, AVDK and board configuration intact.
+
+The existing BK7259 target patch still logs HTTPS request and response bodies. `SDK_REVISION`
+records the selected commit, declared patch, and deterministic `include/` and `src/` digest.
+AOSL is based on commit
 `84e086084ebcd0ae2455a0ce5721950c5fe2e656` with its five documented BK7259 HAL fixes. The build has
 no `MYBOT_SDK_DIR` or external AOSL source-path input.
 

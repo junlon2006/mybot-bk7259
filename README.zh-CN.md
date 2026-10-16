@@ -76,14 +76,20 @@ BK7259 固件采用 AP/CP 双核架构：
 - `mybot_rtsa` —— 内嵌的 Agora RTSA SDK（`include/` 头文件与
   `lib/arm/libagora-rtc-sdk.a`）。
 
-解决方案内嵌的 mybot SDK 以上游 commit
-`064397882187a242be25a525a91df83d353b78bb`（`main`，SDK 版本仍为 1.2.0）的完整源码快照
-为基线，新增控制事件非阻塞投递、重新配对时清理开聊请求、提示音代次跟踪及 HTTP/JSON
-边界修复。同时包含视频控制串行化、提示音延后销毁、统一的 RTM 到 LCD 状态处理，以及 RTM
-`listening/thinking/speaking` 服务端状态 LCD indicator 和可选视频上行契约；BK7259 构建已启用
-视频。该上游快照已经包含 `RTC_LOG_ERROR` 和恢复 AOSL 日志门限的修复；`SDK_REVISION` 另记录
-调试固件打印 HTTPS 请求与响应 body 的 BK7259 目标 patch。`SDK_REVISION` 同时记录
-`include/`、`src/` 的确定性聚合摘要。AOSL 基线为 commit
+解决方案内嵌的 mybot SDK 以上游 `main` commit
+`e7793eba88f721304dc00d421706d4d788b81a43`（SDK版本仍为1.2.0）的完整源码快照为基线。
+绑定轮询和停止通知由后台服务队列执行，本地RTC/媒体停止及状态更新先于停止会话的HTTP请求。
+该快照保留控制事件非阻塞投递、提示音代次跟踪、HTTP/JSON边界修复、视频控制串行化、
+RTC/RTM状态处理及日志门限修复。
+
+SDK支持通过RTM接收DeviceCommand v1的音量设置/增减、播放静音和四种表情命令，校验
+发送方、频道、会话及代次，并按FIFO对最近16个不同command ID去重。`issued_at`及
+`expires_at`可省略或提供但均忽略，不依赖UTC时钟。音量命令复用已有音量适配，静音清零
+扬声器PCM。当前旧版状态卡片UI处理声纹/服务端阶段bit 0-3，忽略情绪bit 4-7；表情渲染
+留待后续UI修改。本次SDK同步保持旧硬件UI渲染器、AVDK和板级配置不变。
+
+原有BK7259目标patch继续打印HTTPS请求与响应body，`SDK_REVISION`记录所选提交、已声明补丁
+及`include/`、`src/`的确定性聚合摘要。AOSL 基线为 commit
 `84e086084ebcd0ae2455a0ce5721950c5fe2e656`，另有五处已记录的 BK7259 HAL 修改。构建过程不接受
 `MYBOT_SDK_DIR` 或外部 AOSL 源码路径。
 
