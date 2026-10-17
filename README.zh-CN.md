@@ -82,20 +82,25 @@ BK7259 固件采用 AP/CP 双核架构：
 - `mybot_rtsa` —— 内嵌的 Agora RTSA SDK（`include/` 头文件与
   `lib/arm/libagora-rtc-sdk.a`）。
 
-父仓库内嵌的 mybot SDK 以上游 `main` commit
-`e7793eba88f721304dc00d421706d4d788b81a43`（SDK版本仍为1.2.0）的完整源码快照为基线。
+父仓库内嵌的 mybot SDK 同步上游 `main` 最新已提交快照
+`39d5ed122aab51d90c1c531298c4ead8dc35b104`（SDK版本仍为1.2.0）。
 绑定轮询和停止通知由后台服务队列执行，本地RTC/媒体停止及状态更新先于停止会话的HTTP请求。
 该快照保留控制事件非阻塞投递、提示音代次跟踪、HTTP/JSON边界修复、视频控制串行化、
 RTC/RTM状态处理及日志门限修复。
 
-SDK支持通过RTM接收DeviceCommand v1的音量设置/增减、播放静音和四种表情命令，校验
-发送方、频道、会话及代次，并按FIFO对最近16个不同command ID去重。`issued_at`及
-`expires_at`可省略或提供但均忽略，不依赖UTC时钟。音量命令复用已有音量适配，静音清零
-扬声器PCM。像素眼镜UI处理声纹/服务端阶段bit 0-3，将情绪bit 4-7映射为一次性LCD表情，
-不控制电机。SDK同步已在本次UI修改之前独立提交。
+通过 RTM 进行 MCP 控制时，SDK 仅接受单层 `message.user` 信封：`data_type` 为
+`message`，字符串 `content` 内包含 DeviceCommand v1；支持 `audio.set_volume`，
+`params.level` 必须是 0–100 的整数，以及 `audio.adjust_volume`，`params.delta` 必须是
+-100–100 的整数。正数增加音量，负数减少音量，0 保持不变，结果钳制到 0–100。
+SDK 校验发送方、频道、会话及代次，并按 FIFO 对最近 16 个不同 command ID 去重，
+重复 ID 不会重复增减音量。`issued_at` 及 `expires_at` 可省略或提供但均忽略，
+不依赖 UTC 时钟。音量命令复用已有音量适配；裸命令、
+`audio.set_mute` 及情绪命令不再通过 RTM 执行。像素眼镜 UI 保留本地表情及声纹/服务端
+阶段 bit 0-3 处理；当前 SDK 快照关闭云端 MCP 情绪入口。
 
-原有BK7259目标patch继续打印HTTPS请求与响应body，`SDK_REVISION`记录所选提交、已声明补丁
-及`include/`、`src/`的确定性聚合摘要。AOSL 基线为 commit
+原有 BK7259 目标 patch 继续打印 HTTPS 请求与响应 body。
+`SDK_REVISION` 记录基准提交、已声明目标补丁及
+`include/`、`src/` 的确定性聚合摘要。AOSL 基线为 commit
 `84e086084ebcd0ae2455a0ce5721950c5fe2e656`，另有五处已记录的 BK7259 HAL 修改。构建过程不接受
 `MYBOT_SDK_DIR` 或外部 AOSL 源码路径。
 
@@ -312,11 +317,10 @@ LVGL 9.5.0渲染器以模拟器的 `process`（工艺灰）皮肤与 `geek`（�
 摄像头预览。
 
 READY显示NEUTRAL；进入会话后SURPRISED保持300 ms，并另计进入过渡。随后LISTENING显示
-聆听，THINKING连续三秒后转PROCESSING，SPEAKING或无阶段时显示NEUTRAL。通过SDK校验及
-去重的新MCP表情命令覆盖当前表情，同名新命令也重播：HAPPY/SAD/ANGRY/SURPRISED分别显示
-HAPPY/SAD/ANNOYED/SURPRISED，保持2秒/3秒/1.2秒/0.8秒。开启动画时，每次保持另加进入的
-250 ms过渡，会话开场同样另计；到期恢复最新阶段表情，挂断回中性待机。全部23个表情与
-本地显示接口见[工程说明](projects/mybot/README_CN.md#5-显示与表情)。
+聆听，THINKING连续三秒后转PROCESSING，SPEAKING或无阶段时显示NEUTRAL。开启动画时，
+会话开场另加250 ms进入过渡；到期恢复最新阶段表情，挂断回中性待机。当前 SDK 快照关闭
+云端 MCP 情绪入口。全部23个表情及本地显示接口仍可使用，见
+[工程说明](projects/mybot/README_CN.md#5-显示与表情)。
 
 SDK 的 render 调用将内容复制到一个保存最新状态的 mailbox，并唤醒 `mybot_ui` 任务。
 只有该任务更新运行中的视图、执行 LVGL timer 和刷屏；来不及处理的中间状态可以合并为
@@ -399,8 +403,8 @@ python3 projects/mybot/scripts/generate_assets_c.py \
 
 ## 源码边界
 
-- 内嵌的 mybot SDK `include/`、`src/` 以上游完整快照为基线，并包含 `SDK_REVISION` 明示的
-  BK7259 目标 patch；`platforms/` 是 BK7259 平台适配源码。
+- 内嵌的 mybot SDK `include/`、`src/` 以记录的上游提交为基线，包含 `SDK_REVISION` 明示的
+  BK7259 HTTPS body 日志补丁；`platforms/` 是 BK7259 平台适配源码。
 - 内嵌的 AOSL 锁定在记录的版本，包括已声明的五处 BK7259 HAL 修改。
 - 两个 BK 子模块均固定官方源码，tracked 内容不包含产品修改。构建时只在生成的隔离副本中
   应用双核强制门户 DNS 补丁及 Solution 摄像头辅助补丁；音频、视频、配网和显示集成继续

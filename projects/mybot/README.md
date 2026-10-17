@@ -8,15 +8,22 @@
 device-service control, bidirectional RTC audio, local provisioning and UI, and
 one-way encoded video uplink in one conversation.
 
-The SDK snapshot follows upstream `main` commit
-`e7793eba88f721304dc00d421706d4d788b81a43` (version 1.2.0), with the existing declared
-HTTPS-body logging patch. It adds RTM DeviceCommand v1 for volume, mute and four
-emotions without a UTC dependency, and moves binding polls/stop notifications to
-a background service queue so local hangup completes before HTTP notification.
-The SDK synchronization was committed before the separate pixel-glasses UI
-update. The UI now consumes emotion bits 4-7 as LCD-only expressions alongside
-voiceprint/server phases. AVDK, audio, keys, video, power, GPIO and partitions
-retain the old-board configuration.
+The SDK snapshot follows the latest committed upstream `main` revision
+`39d5ed122aab51d90c1c531298c4ead8dc35b104` (version 1.2.0).
+The target retains its HTTPS-body logging patch.
+MCP control over RTM requires one `message.user` envelope, `data_type: "message"`,
+and string `content` containing DeviceCommand v1 `audio.set_volume` with an integer
+`params.level` from 0 to 100, or `audio.adjust_volume` with an integer `params.delta`
+from -100 to 100. Positive deltas increase the volume, negative deltas decrease it,
+and zero leaves it unchanged; the result is clamped to 0–100.
+Sender/channel/conversation/generation checks and FIFO deduplication of the latest
+16 distinct command IDs remain in effect; a duplicate ID does not apply an adjustment
+again. Bare commands, mute and emotion commands are not executed over RTM;
+`issued_at`/`expires_at` remain optional and ignored. Binding polls/stop notifications
+run on a background service queue so local hangup completes before HTTP notification.
+The pixel-glasses UI retains local expressions and voiceprint/server phases; cloud
+MCP emotion input is disabled in this snapshot. AVDK, audio, keys, video, power,
+GPIO and partitions retain the old-board configuration.
 
 ## 2. AP and CP Roles
 
@@ -119,20 +126,18 @@ with 9-pixel terminal rows and a 10-pixel signature. Pairing codes are exactly
 six digits and use a fixed 32-pixel size. The legacy light-theme option is retained for saved configurations;
 the pixel renderer always uses the fixed process-gray appearance.
 
-| Runtime or accepted command | Face and timing |
+| Runtime state | Face and timing |
 | --- | --- |
 | READY / hangup | NEUTRAL |
 | Enter conversation | SURPRISED, 300 ms hold plus entering transition |
 | LISTENING | LISTENING |
 | THINKING | THINKING; PROCESSING after three continuous seconds |
 | SPEAKING / no phase | NEUTRAL |
-| MCP HAPPY / SAD / ANGRY / SURPRISED | HAPPY / SAD / ANNOYED / SURPRISED; 2 s / 3 s / 1.2 s / 0.8 s hold |
 
-With animations enabled, each entering transition adds 250 ms before its hold.
-A new accepted MCP command replaces the current foreground and replays even the
-same expression name; SDK command-ID deduplication still applies. Ordinary state
-and voiceprint updates do not restart a foreground hold. Expiry restores the
-latest automatic phase face, including PROCESSING if thinking has continued
+With animations enabled, the conversation opener adds a 250 ms entering transition
+before its hold. Ordinary state and voiceprint updates do not restart that hold.
+Cloud MCP emotion input is disabled in the current SDK snapshot. Opener expiry
+restores the latest automatic phase face, including PROCESSING if thinking has continued
 for three seconds in the background. Leaving a conversation clears its timers;
 operating guidance and factory reset take precedence. Expressions control LCD
 artwork only and do not send motor commands.
@@ -147,9 +152,9 @@ ANNOYED, REFUSE, PROCESSING, ERROR, SLEEP
 
 `include/bk7259_expression.h` provides name conversion and copied local display
 requests via `bk7259_lcd_set_expression()` / `bk7259_lcd_clear_expression()`.
-Local overrides persist until cleared, a workflow change, or a later explicit
-MCP request; repeating a local override does not replay it. Clearing restores
-the latest automatic face. ERROR and SLEEP artwork do not change runtime state.
+Local overrides persist until cleared or a workflow change; repeating a local
+override does not replay it. Clearing restores the latest automatic face. ERROR
+and SLEEP artwork do not change runtime state.
 The existing display owner performs rendering, animations and expiration;
 no additional UI thread or UTC clock is required.
 
@@ -165,5 +170,7 @@ no additional UI thread or UTC clock is required.
 - [ ] End, restart, and interrupt conversations repeatedly; confirm the encoder, frame pool, camera, and RTC resources stop and restart cleanly.
 - [ ] Check all 23 faces, four terminal rows, both languages and pairing guidance on the 385x320 logical display; terminal text, pairing codes and the main glasses artwork must remain visible inside all four rounded corners.
 - [ ] Verify the SURPRISED opener, phase transitions and three-second THINKING timeout; hangup must restore NEUTRAL.
-- [ ] Verify MCP replacement, same-name new-command replay and hold expiry without motor output; repeated phase/voiceprint updates must preserve foreground timing.
+- [ ] Test MCP `audio.set_volume` at 0, 50 and 100 through the `message.user` envelope; bare commands, mute and emotion commands must have no effect.
+- [ ] Test wrapped `audio.adjust_volume` with positive, negative and zero deltas, including -100 and 100; results must clamp to 0–100, and repeating a command ID must not adjust the volume again.
+- [ ] Verify local expression set/clear and repeated overrides without motor output; repeated phase/voiceprint updates must preserve the conversation opener timing.
 - [ ] Regress the original four ADC keys, long-press provisioning/factory reset, audio and video while exercising UI animations.

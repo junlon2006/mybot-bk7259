@@ -7,11 +7,18 @@
 `mybot` 是 MyBot SDK 的 BK7259 AP/CP 双核固件集成工程，在同一次会话中提供设备服务控制、
 RTC 双向音频、本地配网与界面，以及单向编码视频上行。
 
-内嵌SDK同步上游`main`的`e7793eba88f721304dc00d421706d4d788b81a43`（版本1.2.0），
-保留原已声明的HTTPS body日志补丁。SDK新增无UTC依赖的RTM DeviceCommand v1音量、
-静音及四种表情命令；绑定轮询/停止通知移到后台服务队列，本地挂断先于HTTP通知完成。
-SDK同步已在像素眼镜UI修改之前独立提交。UI现将情绪bit 4-7映射为LCD表情，同时处理
-声纹/服务端阶段；AVDK、音频、按键、视频、电源、GPIO及分区保留旧硬件配置。
+内嵌 SDK 同步上游 `main` 最新已提交快照
+`39d5ed122aab51d90c1c531298c4ead8dc35b104`（版本1.2.0），保留 HTTPS body 日志补丁。
+通过 RTM 进行 MCP 控制时，仅接受
+单层 `message.user` 信封，`data_type` 为 `message`，字符串 `content` 内包含
+DeviceCommand v1 的 `audio.set_volume`（`params.level` 为 0–100 的整数）或
+`audio.adjust_volume`（`params.delta` 为 -100–100 的整数）。正数增加音量，负数减少音量，
+0 保持不变，结果钳制到 0–100。发送方、频道、会话、代次校验及最近 16 个不同 command ID
+的 FIFO 去重保持生效，重复 ID 不会重复增减音量；裸命令、静音及情绪命令不再通过 RTM
+执行，`issued_at`/`expires_at` 仍可省略且忽略。
+绑定轮询/停止通知由后台服务队列执行，本地挂断先于HTTP通知完成。像素眼镜 UI 保留
+本地表情及声纹/服务端阶段处理，当前快照关闭云端 MCP 情绪入口。AVDK、音频、按键、
+视频、电源、GPIO及分区保留旧硬件配置。
 
 ## 2. AP 与 CP 职责
 
@@ -101,17 +108,16 @@ S3 恢复出厂，并保留 LCD 提示。
 屏幕四角有明显圆弧，终端文字、配对码与眼镜主体须位于可见安全区；照片未提供精确硬件半径。
 旧浅色主题选项仅保留配置兼容，新像素渲染器固定使用工艺灰外观。
 
-| 状态或通过校验的新命令 | 表情与时间 |
+| 运行状态 | 表情与时间 |
 | --- | --- |
 | READY / 挂断 | NEUTRAL |
 | 进入会话 | SURPRISED保持300 ms，另计进入过渡 |
 | LISTENING | LISTENING |
 | THINKING | THINKING；连续三秒后PROCESSING |
 | SPEAKING / 无阶段 | NEUTRAL |
-| MCP HAPPY / SAD / ANGRY / SURPRISED | HAPPY / SAD / ANNOYED / SURPRISED，保持2秒/3秒/1.2秒/0.8秒 |
 
-开启动画时，每次保持时间另加250 ms进入过渡。新受理的MCP命令替换当前前景，同名新命令
-也重播，SDK原有command ID去重仍生效。普通状态和声纹更新不重置前景保持计时；到期恢复
+开启动画时，会话开场保持时间另加250 ms进入过渡。普通状态和声纹更新不重置开场保持
+计时；当前 SDK 快照关闭云端 MCP 情绪入口。开场到期恢复
 最新自动阶段，后台THINKING已持续三秒时恢复PROCESSING。离开会话清除计时，必要引导与
 恢复出厂优先。表情只控制LCD图案，不发送电机命令。
 
@@ -124,8 +130,8 @@ ANNOYED, REFUSE, PROCESSING, ERROR, SLEEP
 ```
 
 `include/bk7259_expression.h`提供名称转换及复制投递的本地接口
-`bk7259_lcd_set_expression()` / `bk7259_lcd_clear_expression()`。本地覆盖保持至清除、流程
-切换或更新的MCP请求，重复同一本地覆盖不重播；清除后恢复最新自动表情。ERROR、SLEEP图案
+`bk7259_lcd_set_expression()` / `bk7259_lcd_clear_expression()`。本地覆盖保持至清除或流程
+切换，重复同一本地覆盖不重播；清除后恢复最新自动表情。ERROR、SLEEP图案
 不改变实际运行状态。渲染、动画和到期处理均由现有显示owner执行，不新增UI线程或UTC依赖。
 
 ## 6. 真机验收
@@ -140,5 +146,7 @@ ANNOYED, REFUSE, PROCESSING, ERROR, SLEEP
 - [ ] 反复结束、重启和中断会话，确认编码器、帧池、摄像头及 RTC 资源均能正常停止并再次启动。
 - [ ] 在385x320逻辑屏验证全部23表情、四行文字、中英文及配对引导，确认终端文字、配对码与眼镜主体不被四个实体圆角遮挡。
 - [ ] 验证SURPRISED开场、阶段切换及THINKING连续三秒超时；挂断应恢复NEUTRAL。
-- [ ] 验证MCP替换、同名新命令重播、保持到期，且无电机输出；重复阶段/声纹更新不重置前景计时。
+- [ ] 通过 `message.user` 信封验证 MCP `audio.set_volume` 的 0、50、100 音量；裸命令、静音及情绪命令应无效果。
+- [ ] 验证封装后的 `audio.adjust_volume` 正数、负数及 0，包含 -100、100 边界；结果应钳制到 0–100，重复 command ID 不应再次增减音量。
+- [ ] 验证本地表情设置/清除及重复覆盖，且无电机输出；重复阶段/声纹更新不重置会话开场计时。
 - [ ] 动画运行时回归原四个ADC按键、长按配网/恢复出厂及音视频功能。
