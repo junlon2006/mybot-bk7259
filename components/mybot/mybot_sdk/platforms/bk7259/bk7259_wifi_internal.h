@@ -8,7 +8,11 @@
 #include <stdint.h>
 
 int bk7259_wifi_portal_run(const char *device_id);
+/* Retry a SoftAP teardown that did not complete in portal_run(). */
+int bk7259_wifi_portal_stop(void);
 
+/* Candidate connection, scan and credential persistence return
+ * BK7259_NETWORK_CANCELLED when factory reset takes precedence. */
 int bk7259_wifi_manager_connect_candidate(const char *ssid, const char *password,
                                           uint32_t timeout_ms);
 int bk7259_wifi_manager_disconnect(void);

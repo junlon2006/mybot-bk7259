@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bk7259_ops.h"
+#include "bk7259_factory_reset.h"
 #include "mybot_bk7259_platform.h"
 
 #include <adc_key_main.h>
+#include <api/aosl_atomic.h>
 #include <common/bk_err.h>
 #include "bk7259_platform_log.h"
 #include <mybot/mybot.h>
@@ -114,7 +116,6 @@ typedef struct {
     beken_mutex_t lock;
     beken_semaphore_t callback_idle;
     beken_semaphore_t provision_request;
-    beken_semaphore_t reset_request;
     mybot_key_event_handler_t emit;
     void *user_data;
     unsigned int in_flight;
@@ -127,6 +128,17 @@ typedef struct {
 } key_state_t;
 
 static key_state_t s_key;
+/* Provisioning observes this request without consuming it; only the product
+ * lifecycle task takes it before entering durable reset recovery. */
+static aosl_atomic_t s_factory_reset_requested;
+
+bool bk7259_factory_reset_requested(void) {
+    return aosl_atomic_read(&s_factory_reset_requested) != 0;
+}
+
+bool bk7259_factory_reset_take_request(void) {
+    return aosl_atomic_xchg(&s_factory_reset_requested, 0) != 0;
+}
 
 static void key_conversation_short_press(void);
 static void key_conversation_long_press(void);
@@ -207,7 +219,7 @@ static void emit_key_event(mybot_key_event_t event) {
     void *user_data;
 
     rtos_lock_mutex(&s_key.lock);
-    if (!s_key.sdk_attached || s_key.detaching) {
+    if (!s_key.sdk_attached || s_key.detaching || bk7259_factory_reset_requested()) {
         rtos_unlock_mutex(&s_key.lock);
         return;
     }
@@ -258,6 +270,9 @@ static void key_conversation_short_press(void) {
  * only posts a request and the application loop starts the portal after
  * mybot_stop() has returned. */
 static void key_conversation_long_press(void) {
+    if (bk7259_factory_reset_requested()) {
+        return;
+    }
     if (rtos_set_semaphore(&s_key.provision_request) != BK_OK) {
         MYBOT_LOGW(TAG, "conversation key long press: failed to post provisioning "
                      "request");
@@ -285,11 +300,7 @@ static void key_volume_down_short_press(void) {
 /* The erase has to run with the SDK stopped, so the callback only posts a
  * request and the application loop performs it after mybot_stop(). */
 static void key_factory_reset_long_press(void) {
-    if (rtos_set_semaphore(&s_key.reset_request) != BK_OK) {
-        MYBOT_LOGW(TAG, "factory reset key long press: failed to post reset "
-                     "request");
-        return;
-    }
+    aosl_atomic_set(&s_factory_reset_requested, 1);
     MYBOT_LOGW(TAG, "factory reset key long press: factory reset requested");
 }
 
@@ -360,7 +371,6 @@ static void key_release_framework(void) {
         s_key.adc_key_owned = false;
     }
     s_key.handle_count = 0;
-    rtos_deinit_semaphore(&s_key.reset_request);
     rtos_deinit_semaphore(&s_key.provision_request);
     rtos_deinit_semaphore(&s_key.callback_idle);
     rtos_deinit_mutex(&s_key.lock);
@@ -428,14 +438,7 @@ int bk7259_key_prepare(void) {
         rtos_deinit_mutex(&s_key.lock);
         return -1;
     }
-    if (rtos_init_semaphore(&s_key.reset_request, 1) != BK_OK) {
-        MYBOT_LOGE(TAG, "key reset semaphore initialization failed");
-        rtos_deinit_semaphore(&s_key.provision_request);
-        rtos_deinit_semaphore(&s_key.callback_idle);
-        rtos_deinit_mutex(&s_key.lock);
-        return -1;
-    }
-
+    aosl_atomic_set(&s_factory_reset_requested, 0);
     if (bk_adc_key_init_ex(&driver_config) != BK_OK) {
         MYBOT_LOGE(TAG, "ADC key manager initialization failed; is the SARADC "
                      "sampler running on the CP?");
@@ -476,6 +479,7 @@ void bk7259_key_shutdown(void) {
     key_detach();
     key_release_framework();
     s_key.prepared = false;
+    aosl_atomic_set(&s_factory_reset_requested, 0);
     MYBOT_LOGI(TAG, "key stopped");
 }
 
@@ -484,13 +488,6 @@ bool mybot_bk7259_wait_provision_request(uint32_t timeout_ms) {
         return false;
     }
     return rtos_get_semaphore(&s_key.provision_request, timeout_ms) == BK_OK;
-}
-
-bool mybot_bk7259_wait_reset_request(uint32_t timeout_ms) {
-    if (!s_key.prepared) {
-        return false;
-    }
-    return rtos_get_semaphore(&s_key.reset_request, timeout_ms) == BK_OK;
 }
 
 static int key_init(void **out_ctx, mybot_key_event_handler_t emit, void *user_data) {

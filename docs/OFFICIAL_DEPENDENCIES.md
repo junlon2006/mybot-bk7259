@@ -152,6 +152,46 @@ AP/CP/tools 与原产品依赖 `f699c50f2ee72e7ca014c8f009e0d40f1eeb059a` 对应
 `bash projects/mybot/tests/expression_policy/run.sh` 的13组、462条断言通过。本次没有改变
 UI策略或外设运行逻辑，也未将历史实机结果视为本次迁移后的实机结果。仍需用户烧录后验证。
 
+## main 可靠性回移（官方依赖迁移之后）
+
+产品层回移 R2 的 HTTPS socket 错误隔离、持久化恢复出厂和配网取消/清理逻辑。
+官方子模块、版本锁及厂商补丁不变；MyBot SDK、AOSL、RTSA 快照不变。
+保留旧板四个 ADC 按键及约两秒长按阈值、S2 独立配网、单地区单根证书、JD9855 圆角屏
+尺寸与布局、双 DMIC/AEC、摄像头和电源配置，不引入舵机或 R2 硬件参数。
+
+恢复意图在 SDK 停止前写入；只有确认 SDK 已停止、门户/扫描/STA 已退出后，才删除并回读
+三条产品记录。失败保留恢复入口、等待新 S3 长按；断电后优先恢复。网络/SDK 启动失败也
+保留 LCD 与按键，允许 S2 独立重新配网。界面新增双语恢复、重试和重启提示。
+
+相关主机验证入口：
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_*.py'
+python3 scripts/check_sources.py
+bash projects/mybot/tests/expression_policy/run.sh
+bash projects/mybot/tests/https/run.sh
+bash projects/mybot/tests/factory_reset/run.sh
+bash projects/mybot/tests/reset_owner/run.sh
+bash projects/mybot/tests/wifi/run.sh
+```
+
+测试编译实际产品实现并注入 socket、网络、存储和 SDK 生命周期故障；不连接真实服务或
+擦除设备存储。固件构建使用 `--build-root build/main-reliability`
+和 `--output-root releases/main-reliability`。实机仍需验证并发 HTTPS、配网中长按取消、
+反复 S2 重配网、S3 恢复及中途断电续做；主机测试不能替代这些硬件验证。
+
+2026-10-17 验证结果：构建工具16项、表情策略13组462条断言、HTTPS 5项、Wi-Fi 16组、
+恢复控制11组及存储故障测试通过；新增模块的 ASan/UBSan 检查通过。中文、英文 AP/CP
+完整编译通过，最终重新配网请求清理修正也已双语增量重编。新增恢复画面完成双语及无动画
+主机渲染检查，保留385×320、90px圆角模拟安全区；真实圆角半径与实机运行仍待验证。
+
+本次核对锁定 SDK 的 `PORTING.zh-CN.md`、`EMBEDDED.zh-CN.md` 及相关平台接口契约。
+SDK 仍为 `e7793eba88f721304dc00d421706d4d788b81a43`，`include/src` 摘要仍为
+`fb7bd88a4d191e3b341c54d8a993b70b4a7b7ea3bd4632411f7899156015fa67`；
+AOSL 基线仍为 `84e086084ebcd0ae2455a0ce5721950c5fe2e656`，已声明目标补丁后的摘要仍为
+`2e9fc3fa5571972fd31c1ab64546477a98550b6b210e38fec181c0f4daeae64e`。
+RTSA 仍为1.10.1，头文件和库摘要校验通过；两套官方子模块固定提交及干净状态见上表。
+
 ## English
 
 `main` pins the two official `bekencorp` repositories to the commits listed above. Product files

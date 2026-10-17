@@ -111,7 +111,10 @@ has not been measured precisely. The view
 uses the simulator's process-gray skin and pixel glasses, with four terminal
 rows for mood, runtime state and conversation phase/voiceprint text. Startup,
 provisioning, web-console pairing and errors retain bilingual guidance;
-factory reset keeps the original board workflow. The artwork is 346x302 at (19,9),
+factory reset shows restoring, retry and reboot guidance above ordinary SDK updates.
+S3 retains its configured ADC long press; reset intent survives power loss, and cleanup requires
+SDK/network shutdown plus verified deletion of only the three MyBot records. Failed network/SDK
+startup keeps keys and LCD available for S2 reprovisioning or S3 reset. The artwork is 346x302 at (19,9),
 with 9-pixel terminal rows and a 10-pixel signature. Pairing codes are exactly
 six digits and use a fixed 32-pixel size. The legacy light-theme option is retained for saved configurations;
 the pixel renderer always uses the fixed process-gray appearance.

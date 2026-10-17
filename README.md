@@ -289,6 +289,11 @@ for the Chinese service, or Go Daddy Root Certificate Authority - G2 for the ove
 Each connection parses only that root, reducing certificate storage and per-connection heap use.
 Certificate-chain and hostname validation remain required.
 
+The BK7259 HTTPS transport uses its own socket BIO, `select()`, per-socket `SO_ERROR`
+and TCP peer confirmation. Concurrent requests do not classify failures using lwIP's shared
+`errno`. Connect/send/receive deadlines remain bounded; this improves error isolation rather
+than guaranteeing shorter TLS handshakes.
+
 Everything else about the device identity is fixed by the port rather than configured:
 [ap_main.c](projects/mybot/ap/ap_main.c) derives the device id at runtime from the
 per-chip device UID (read by the CP) using HMAC-SHA256 with `mybot-bk7259-device-id-v1` as the
@@ -310,12 +315,19 @@ The volume keys emit `MYBOT_KEY_EVENT_VOLUME_UP` / `MYBOT_KEY_EVENT_VOLUME_DOWN`
 those to `mybot_media_pipeline_adjust_volume()` and the platform volume adapter persists the
 resulting level. They are only delivered while the SDK is running.
 
-The S3 long press only posts a reset request — the erase runs after `mybot_stop()` has returned,
-never while the SDK still holds EasyFlash or Wi-Fi. It wipes the EasyFlash environment, which holds
-the Wi-Fi credential record, the device credential record, and the persisted volume, and then
-reboots. The device comes back unprovisioned and raises its `mybot-xxxx` access point again. It is
-long-press-only, so a stray touch on the button that sits next to the conversation key cannot erase
-the device.
+The S3 long press posts a reset request. The product task first persists a reset intent,
+then requires the SDK to be stopped and the portal, scan and STA to be shut down. It deletes
+and verifies only `mybot.device_auth`, `mybot.wifi.v1` and `mybot.volume.v1`, leaving unrelated
+EasyFlash records intact. It removes the intent last and reboots into provisioning. Interrupted
+resets resume before network/SDK startup on the next boot. Invalid intent or a failed reset
+shows a recovery screen and waits for a fresh S3 long press; it does not reboot as if successful.
+The hold threshold and all four ADC key mappings remain unchanged.
+
+Network setup observes reset requests during scan, connection, HTTP handling and credential
+saving. Failed scan/STA/SoftAP stops retain ownership for a later retry. Network or SDK startup
+failures keep the LCD and keys alive: S2 long press retries independent provisioning while
+preserving device credentials and volume, and S3 long press performs factory reset. APSTA cannot
+start until SDK shutdown reaches `STOPPED` and `mybot_is_running()` is false.
 
 [usr_gpio_cfg.h](projects/mybot/ap/config/bk7259_ap/usr_gpio_cfg.h) sets the
 matching power-on pad state. The ADC pads stay high-Z with no pull, because an internal pull-up
@@ -340,7 +352,7 @@ state; conversation text includes the server phase and voiceprint-registration s
 The artwork scales uniformly to 346x302, with 9-pixel terminal text and a 10-pixel signature.
 Pairing codes are exactly six digits, displayed at a fixed 32-pixel size.
 Startup, provisioning, web-console pairing and errors retain bilingual guidance;
-factory reset keeps the original board's workflow.
+factory reset adds restoring, retry and reboot guidance with priority over SDK/face updates.
 GPU and touch remain disabled; there is no camera preview.
 
 READY shows NEUTRAL. Entering a conversation shows SURPRISED for 300 ms after its entering
