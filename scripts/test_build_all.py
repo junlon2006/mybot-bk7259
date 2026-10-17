@@ -1,6 +1,8 @@
 import os
+import subprocess
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -76,6 +78,63 @@ class BuildAllTests(unittest.TestCase):
                 build_all.publish_outputs(staged, [first, second])
 
             self.assertEqual(first.read_bytes(), b"previous")
+
+    def test_changed_vendor_invalidates_no_clean_build_cache(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "source"
+            config = project / "ap/config/bk7259_ap/defconfig"
+            config.parent.mkdir(parents=True)
+            config.write_text("original\n", encoding="utf-8")
+            first_components = root / "vendor-first/components"
+            second_components = root / "vendor-second/components"
+            first_components.mkdir(parents=True)
+            second_components.mkdir(parents=True)
+            with patch.object(build_all, "PROJECT", project):
+                copy = build_all.prepare_variant(root / "variant", "first\n", clean=True,
+                                                 components=first_components)
+                (copy / "build").mkdir()
+                (copy / "build/cache").write_text("stale objects", encoding="utf-8")
+                build_all.prepare_variant(root / "variant", "second\n", clean=False,
+                                          components=second_components)
+            self.assertFalse((copy / "build").exists())
+            self.assertEqual((root / "variant/solution/components").resolve(), second_components)
+
+    def test_second_language_build_failure_preserves_previous_firmware_pair(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "projects/mybot"
+            config = project / "ap/config/bk7259_ap/defconfig"
+            config.parent.mkdir(parents=True)
+            config.write_text("CONFIG_MYBOT_LANGUAGE_ZH_CN=y\n"
+                              "# CONFIG_MYBOT_LANGUAGE_EN_US is not set\n"
+                              "CONFIG_MYBOT_VIDEO=y\n", encoding="utf-8")
+            vendor = root / "prepared"
+            (vendor / "bk_solution_ai/components").mkdir(parents=True)
+            outputs = root / "releases"
+            outputs.mkdir()
+            images = [outputs / f"bk7259-{language}-video.bin" for language in build_all.LANGUAGES]
+            for image in images:
+                image.write_bytes(b"previous")
+            built = root / "new-image.bin"
+            built.write_bytes(b"new")
+            args = Namespace(language="both", build_root=root / "build", output_root=outputs,
+                             dry_run=False, no_clean=False)
+            with patch.object(build_all, "ROOT", root), \
+                    patch.object(build_all, "PROJECT", project), \
+                    patch.object(build_all, "parse_args", return_value=args), \
+                    patch.object(build_all, "select_python", return_value=Path("/usr/bin/python3")), \
+                    patch.object(build_all, "prepare_vendor", return_value=vendor) as prepare, \
+                    patch.object(build_all, "check_firmware", return_value=built), \
+                    patch.object(build_all.subprocess, "run", side_effect=[
+                        None, subprocess.CalledProcessError(1, "make")]) as run:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    build_all.main()
+            prepare.assert_called_once()
+            for call in run.call_args_list:
+                self.assertIn(f"SDK_DIR={vendor / 'bk_avdk_smp'}", call.args[0])
+            for image in images:
+                self.assertEqual(image.read_bytes(), b"previous")
 
 
 if __name__ == "__main__":
