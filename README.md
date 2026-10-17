@@ -94,22 +94,29 @@ for the source layout, patch scope, and upgrade procedure.
 - `mybot_rtsa` — the vendored Agora RTSA SDK (`include/` headers and
   `lib/arm/libagora-rtc-sdk.a`).
 
-The parent repository vendors the mybot SDK from upstream `main` commit
-`e7793eba88f721304dc00d421706d4d788b81a43` (SDK version 1.2.0). Binding polls and stop notifications
+The parent repository vendors the latest committed mybot SDK snapshot from upstream `main`
+at `39d5ed122aab51d90c1c531298c4ead8dc35b104` (SDK version 1.2.0).
+Binding polls and stop notifications
 run on a background service queue; local RTC/media teardown and state updates happen before the
 stop HTTP request. The snapshot retains nonblocking control delivery, prompt-generation tracking,
 HTTP/JSON boundary fixes, serialized video control, and the RTC/RTM state and log-gate fixes.
 
-The SDK accepts RTM DeviceCommand v1 for volume set/adjust, playback mute, and four emotions.
+For MCP control over RTM, the SDK accepts one `message.user` envelope with
+`data_type: "message"` and a string `content` containing DeviceCommand v1. It supports
+`audio.set_volume` with an integer `params.level` from 0 to 100, and `audio.adjust_volume`
+with an integer `params.delta` from -100 to 100. Positive deltas increase the volume,
+negative deltas decrease it, and zero leaves it unchanged; the result is clamped to 0–100.
 It checks sender, channel, conversation and generation, and deduplicates the latest 16 distinct
-command IDs in FIFO order. `issued_at` and `expires_at` are optional and ignored; commands do not
-depend on a UTC clock. Volume commands use the existing audio-volume adapter and mute silences
-speaker PCM. The pixel-glasses renderer handles voiceprint/server-state bits 0-3 and uses
-emotion bits 4-7 for one-shot LCD expressions. These display requests do not control motors.
-The SDK synchronization was committed separately before the UI update.
+command IDs in FIFO order, so a duplicate ID does not apply a relative adjustment again.
+`issued_at` and `expires_at` are optional and ignored; commands do not
+depend on a UTC clock. Volume commands use the existing audio-volume adapter. Bare commands,
+`audio.set_mute` and emotion commands are not executed over RTM.
+The pixel-glasses UI retains local expressions and voiceprint/server-state bits 0-3;
+cloud MCP emotion input is disabled in this SDK snapshot.
 
-The existing BK7259 target patch still logs HTTPS request and response bodies. `SDK_REVISION`
-records the selected commit, declared patch, and deterministic `include/` and `src/` digest.
+The existing BK7259 target patch retains HTTPS request/response body logging.
+`SDK_REVISION` records the base commit, declared target patch, and deterministic
+`include/` and `src/` digest.
 AOSL is based on commit
 `84e086084ebcd0ae2455a0ce5721950c5fe2e656` with its five documented BK7259 HAL fixes. The build has
 no `MYBOT_SDK_DIR` or external AOSL source-path input.
@@ -357,12 +364,10 @@ GPU and touch remain disabled; there is no camera preview.
 
 READY shows NEUTRAL. Entering a conversation shows SURPRISED for 300 ms after its entering
 transition. LISTENING then selects its face; continuous THINKING selects PROCESSING after
-three seconds; SPEAKING or no active phase selects NEUTRAL. New accepted MCP emotion commands
-temporarily replace the current face, including a replay for a new command with the same name.
-HAPPY, SAD, ANGRY and SURPRISED map to HAPPY, SAD, ANNOYED and SURPRISED, held for
-2 s, 3 s, 1.2 s and 0.8 s respectively. An enabled entering transition adds 250 ms to each
-hold, including the conversation opener. Expiry restores the latest automatic phase face;
-hangup restores NEUTRAL. The 23-expression list and local display API are in the
+three seconds; SPEAKING or no active phase selects NEUTRAL. An enabled entering transition
+adds 250 ms to the conversation opener. Its expiry restores the latest automatic phase face;
+hangup restores NEUTRAL. Cloud MCP emotion input is disabled in the current SDK snapshot.
+The 23-expression list and local display API remain available in the
 [project guide](projects/mybot/README.md#5-display-and-expressions).
 
 SDK render calls copy their content into one latest-state mailbox and wake the `mybot_ui` task.
@@ -457,9 +462,8 @@ PCM.
 
 ## Source boundaries
 
-- Vendored mybot SDK `include/` and `src/` are based on the upstream commit and include the BK7259
-  target patches recorded in `mybot_sdk/SDK_REVISION`; they are not a byte-for-byte unmodified
-  upstream snapshot.
+- Vendored mybot SDK `include/` and `src/` follow the recorded upstream commit, with the
+  BK7259 HTTPS-body logging patch recorded in `mybot_sdk/SDK_REVISION`.
 - Vendored AOSL is locked to its recorded base and content digest, including the five declared
   BK7259 HAL modifications.
 - Both BK submodules are pinned official source, with no tracked product edits. The build applies
