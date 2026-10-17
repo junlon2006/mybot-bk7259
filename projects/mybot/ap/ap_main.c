@@ -2,6 +2,7 @@
 
 #include <components/bk_uid.h>
 #include <components/log.h>
+#include <components/system.h>
 #include <media_service.h>
 #include <mbedtls/md.h>
 #include <os/os.h>
@@ -11,6 +12,7 @@
 #include <mybot/mybot_version.h>
 
 #include <mybot_bk7259_platform.h>
+#include <bk7259_factory_reset.h>
 #include <bk7259_lcd.h>
 
 #include <stdbool.h>
@@ -140,9 +142,77 @@ static int mybot_build_config(void)
     return written > 0 && (size_t)written < sizeof(s_config.device_id) ? 0 : -1;
 }
 
+static void show_factory_reset(bk7259_factory_reset_screen_t screen)
+{
+    if (bk7259_lcd_show_factory_reset(screen) < 0) {
+        BK_LOGE(TAG, "factory reset display update failed: phase=%d\r\n", (int)screen);
+    }
+}
+
+/* This task owns reset, including retries. Persist intent before stopping any
+ * writer, so interrupted shutdown resumes before network/SDK startup next boot. */
+static void mybot_factory_reset_loop(bool requested)
+{
+    for (;;) {
+        /* Reprovisioning cannot replace a reset that has already begun. */
+        (void)mybot_bk7259_wait_provision_request(0);
+        if (!requested) {
+            requested = bk7259_factory_reset_take_request();
+            if (!requested) {
+                (void)rtos_delay_milliseconds(MYBOT_POLL_INTERVAL_MS);
+                continue;
+            }
+        }
+        requested = false;
+        (void)bk7259_factory_reset_take_request();
+        show_factory_reset(BK7259_FACTORY_RESET_RESTORING);
+
+        int intent_result = bk7259_factory_reset_begin();
+        BK_LOGW(TAG, "stopping SDK for factory reset\r\n");
+        mybot_stop();
+        if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
+            BK_LOGE(TAG, "factory reset deferred: SDK has not stopped\r\n");
+            show_factory_reset(BK7259_FACTORY_RESET_FAILED);
+            continue;
+        }
+        if (bk7259_factory_reset_disconnect_network() < 0) {
+            BK_LOGE(TAG, "factory reset deferred: network teardown incomplete\r\n");
+            show_factory_reset(BK7259_FACTORY_RESET_FAILED);
+            continue;
+        }
+        if (intent_result < 0 || bk7259_factory_reset_clear() < 0) {
+            BK_LOGE(TAG, "factory reset incomplete; long press reset key to retry\r\n");
+            show_factory_reset(BK7259_FACTORY_RESET_FAILED);
+            continue;
+        }
+        show_factory_reset(BK7259_FACTORY_RESET_REBOOTING);
+        BK_LOGW(TAG, "factory reset complete: restarting for provisioning\r\n");
+        (void)rtos_delay_milliseconds(250);
+        bk_reboot();
+        /* The reboot API can return before the watchdog resets both cores. */
+        for (;;) {
+            (void)rtos_delay_milliseconds(1000);
+        }
+    }
+}
+
+/* Keep the physical ADC keys, LCD and product AOSL reference alive after a
+ * failure. A fresh S2 long press retries provisioning; S3 enters durable reset. */
+static void mybot_wait_for_recovery(void)
+{
+    BK_LOGW(TAG, "waiting for long press: provision key to reconnect, reset key to erase\r\n");
+    for (;;) {
+        if (bk7259_factory_reset_take_request()) {
+            mybot_factory_reset_loop(true);
+        }
+        if (mybot_bk7259_wait_provision_request(MYBOT_POLL_INTERVAL_MS)) {
+            return;
+        }
+    }
+}
+
 static int mybot_run(void)
 {
-    bool aosl_ref_held = false;
     mybot_state_t last_state = MYBOT_STATE_STOPPED;
     bool state_valid = false;
 
@@ -155,7 +225,6 @@ static int mybot_run(void)
      * but they can run before mybot_start() acquires its own reference. Keep
      * one product-lifetime reference so both paths share initialized globals. */
     aosl_ctor();
-    aosl_ref_held = true;
     /* SDK core and platform adapters use AOSL; raise its gate from ERROR. */
     aosl_set_log_level(AOSL_LOG_NOTICE);
     mybot_log_state_transition(&last_state, &state_valid);
@@ -173,6 +242,17 @@ static int mybot_run(void)
         return -1;
     }
 
+    int reset_pending = bk7259_factory_reset_pending();
+    if (reset_pending != 0) {
+        if (reset_pending > 0) {
+            BK_LOGW(TAG, "resuming factory reset after interrupted shutdown\r\n");
+        } else {
+            BK_LOGE(TAG, "reset intent invalid; waiting for a fresh reset long press\r\n");
+            show_factory_reset(BK7259_FACTORY_RESET_FAILED);
+        }
+        mybot_factory_reset_loop(reset_pending > 0);
+    }
+
     if (mybot_bk7259_platform_register() < 0) {
         BK_LOGE(TAG, "platform registration failed\r\n");
         mybot_bk7259_platform_shutdown();
@@ -180,28 +260,46 @@ static int mybot_run(void)
         return -1;
     }
 
-    int result = -1;
+    bool provision_requested = false;
     for (;;) {
         mybot_log_state_transition(&last_state, &state_valid);
-        /* The SDK is not running here, so the erase is safe to perform. */
-        if (mybot_bk7259_wait_reset_request(0)) {
-            BK_LOGW(TAG, "factory reset requested while the SDK is stopped\r\n");
-            mybot_bk7259_factory_reset();
+        if (bk7259_factory_reset_take_request()) {
+            mybot_factory_reset_loop(true);
         }
-        int network_result = mybot_bk7259_ensure_network(s_config.device_id);
+        /* A failed stop keeps resource ownership. Never hand Wi-Fi to APSTA
+         * until a later explicit retry has actually reached STOPPED. */
+        if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
+            mybot_stop();
+            mybot_log_state_transition(&last_state, &state_valid);
+            if (bk7259_factory_reset_take_request()) {
+                mybot_factory_reset_loop(true);
+            }
+            if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
+                BK_LOGE(TAG, "SDK shutdown did not reach STOPPED; provisioning deferred\r\n");
+                mybot_wait_for_recovery();
+                provision_requested = true;
+                continue;
+            }
+        }
+        bool provisioning = provision_requested;
+        int network_result = provisioning
+            ? mybot_bk7259_provision_wifi(s_config.device_id)
+            : mybot_bk7259_ensure_network(s_config.device_id);
+        provision_requested = false;
         mybot_log_state_transition(&last_state, &state_valid);
+        if (bk7259_factory_reset_take_request()) {
+            mybot_factory_reset_loop(true);
+        }
         if (network_result < 0) {
             BK_LOGE(TAG, "network setup failed\r\n");
-            break;
+            mybot_wait_for_recovery();
+            provision_requested = true;
+            continue;
         }
-        if (network_result > 0) {
+        if (network_result > 0 || provisioning) {
             (void)mybot_bk7259_wait_provision_request(0);
         } else if (mybot_bk7259_wait_provision_request(0)) {
-            if (mybot_bk7259_provision_wifi(s_config.device_id) < 0) {
-                BK_LOGE(TAG, "APSTA provisioning failed\r\n");
-                break;
-            }
-            (void)mybot_bk7259_wait_provision_request(0);
+            provision_requested = true;
             continue;
         }
 
@@ -209,43 +307,34 @@ static int mybot_run(void)
         if (mybot_start(&s_config) < 0) {
             mybot_log_state_transition(&last_state, &state_valid);
             BK_LOGE(TAG, "SDK startup failed\r\n");
-            mybot_stop();
+        } else {
+            BK_LOGI(TAG, "SDK started\r\n");
             mybot_log_state_transition(&last_state, &state_valid);
-            break;
-        }
-        BK_LOGI(TAG, "SDK started\r\n");
-        mybot_log_state_transition(&last_state, &state_valid);
-
-        bool provision_requested = false;
-        bool reset_requested = false;
-        bool sdk_failed = false;
-        while (mybot_is_running()) {
-            mybot_log_state_transition(&last_state, &state_valid);
-            if (mybot_bk7259_wait_reset_request(MYBOT_POLL_INTERVAL_MS)) {
-                reset_requested = true;
-                break;
-            }
-            if (mybot_bk7259_wait_provision_request(MYBOT_POLL_INTERVAL_MS)) {
-                provision_requested = true;
-                break;
-            }
-            if (mybot_get_state() == MYBOT_STATE_FAILED) {
-                BK_LOGE(TAG, "SDK entered the failed state\r\n");
-                sdk_failed = true;
-                break;
+            while (mybot_is_running()) {
+                mybot_log_state_transition(&last_state, &state_valid);
+                if (bk7259_factory_reset_take_request()) {
+                    mybot_factory_reset_loop(true);
+                }
+                if (mybot_bk7259_wait_provision_request(MYBOT_POLL_INTERVAL_MS)) {
+                    provision_requested = true;
+                    break;
+                }
+                if (mybot_get_state() == MYBOT_STATE_FAILED) {
+                    BK_LOGE(TAG, "SDK entered the failed state\r\n");
+                    break;
+                }
             }
         }
         mybot_log_state_transition(&last_state, &state_valid);
-
-        if (!provision_requested && !reset_requested) {
+        if (bk7259_factory_reset_take_request()) {
+            mybot_factory_reset_loop(true);
+        }
+        if (!provision_requested) {
             provision_requested = mybot_bk7259_wait_provision_request(0);
-            reset_requested = mybot_bk7259_wait_reset_request(0);
-            sdk_failed = sdk_failed || mybot_get_state() == MYBOT_STATE_FAILED;
         }
 
         BK_LOGI(TAG, "stopping SDK, reason=%s\r\n",
-                reset_requested ? "reset"
-                                : (provision_requested ? "provision" : "sdk_exit"));
+                provision_requested ? "provision" : "sdk_exit");
         mybot_state_t stop_state = mybot_get_state();
         BK_LOGI(TAG, "SDK stop requested from state=%s(%d)\r\n",
                 mybot_state_name(stop_state), (int)stop_state);
@@ -254,41 +343,19 @@ static int mybot_run(void)
         if (!provision_requested) {
             provision_requested = mybot_bk7259_wait_provision_request(0);
         }
-        if (!reset_requested) {
-            reset_requested = mybot_bk7259_wait_reset_request(0);
-        }
-
-        /* The SDK has released its resources, so the erase takes precedence over
-         * the STOPPED check and over provisioning; it never returns. */
-        if (reset_requested) {
-            BK_LOGW(TAG, "performing factory reset\r\n");
-            mybot_bk7259_factory_reset();
+        if (bk7259_factory_reset_take_request()) {
+            mybot_factory_reset_loop(true);
         }
 
         if (mybot_is_running() || mybot_get_state() != MYBOT_STATE_STOPPED) {
             BK_LOGE(TAG, "SDK shutdown did not reach STOPPED\r\n");
-            break;
+            mybot_wait_for_recovery();
+            provision_requested = true;
+        } else if (!provision_requested) {
+            mybot_wait_for_recovery();
+            provision_requested = true;
         }
-        if (!provision_requested) {
-            result = sdk_failed ? -1 : 0;
-            break;
-        }
-
-        BK_LOGI(TAG, "starting APSTA provisioning\r\n");
-        if (mybot_bk7259_provision_wifi(s_config.device_id) < 0) {
-            BK_LOGE(TAG, "APSTA provisioning failed\r\n");
-            break;
-        }
-        (void)mybot_bk7259_wait_provision_request(0);
     }
-
-    mybot_stop();
-    mybot_log_state_transition(&last_state, &state_valid);
-    mybot_bk7259_platform_shutdown();
-    if (aosl_ref_held) {
-        aosl_dtor();
-    }
-    return result;
 }
 
 static void mybot_app_task(beken_thread_arg_t arg)

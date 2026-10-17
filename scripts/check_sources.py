@@ -87,6 +87,10 @@ def check_boundaries(root):
     project = root / "projects/mybot"
     application = project / "ap/ap_main.c"
     key = platform / "bk7259_key.c"
+    # Native harnesses exercise the real product owner/transport with HAL mocks.
+    # Match exact file/target pairs; SDK private headers remain prohibited.
+    owner_test = project / "tests/reset_owner/test_reset_owner.c"
+    transport_test = project / "tests/https/test_https.c"
     failures = []
     count = 0
     for base in (platform, project):
@@ -121,15 +125,20 @@ def check_boundaries(root):
                 # read-only dependency during the source-only migration; do not widen it.
                 if path == key and header == "mybot/mybot.h":
                     allowed = True
+                if path == transport_test and (path.parent / header).resolve() == \
+                        platform / "bk7259_https.c":
+                    allowed = True
                 protected = header.startswith("mybot/") or Path(header).name in private_names or \
                     "mybot_sdk" in parts or "agora_rtc_api.h" in parts
                 if protected and not allowed:
                     line = uncommented.count("\n", 0, match.start()) + 1
                     failures.append(f"{relative}:{line}: prohibited SDK include {header}")
             code = COMMENTS_AND_LITERALS.sub("", uncommented)
-            if path != application and re.search(r"\bmybot_(?:start|stop|is_running)\s*\(", code):
+            if path not in (application, owner_test) and \
+                    re.search(r"\bmybot_(?:start|stop|is_running)\s*\(", code):
                 failures.append(f"{relative}: SDK lifecycle is owned by ap_main.c")
-            if path not in (application, key) and re.search(r"\bmybot_get_state\s*\(", code):
+            if path not in (application, key, owner_test) and \
+                    re.search(r"\bmybot_get_state\s*\(", code):
                 failures.append(f"{relative}: unapproved SDK state query")
             if re.search(r"\bagora_[a-zA-Z0-9_]+\s*\(", code):
                 failures.append(f"{relative}: direct Agora API call outside SDK")

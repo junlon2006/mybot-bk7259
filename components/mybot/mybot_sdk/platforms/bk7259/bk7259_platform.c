@@ -3,30 +3,11 @@
 #include "bk7259_ops.h"
 
 #include "bk7259_platform_log.h"
-#include <components/system.h>
-#include <easyflash.h>
 #include <mybot/platform/mybot_platform.h>
-#include <os/os.h>
 
 #define TAG "mybot_platform"
 
 static bool s_prepared;
-
-void mybot_bk7259_factory_reset(void) {
-    /* Every persisted MyBot record (Wi-Fi credentials, device credentials,
-     * volume) lives in the EasyFlash environment, so resetting the partition
-     * is the whole factory reset. The AP environment has no vendor calibration
-     * data. The caller must have stopped the SDK first. */
-    MYBOT_LOGW(TAG, "factory reset: erasing persisted state");
-    if (ef_env_set_default() != EF_NO_ERR) {
-        MYBOT_LOGE(TAG, "factory reset: EasyFlash environment erase failed");
-    }
-    MYBOT_LOGW(TAG, "factory reset: rebooting");
-    bk_reboot();
-    for (;;) {
-        (void)rtos_delay_milliseconds(1000);
-    }
-}
 
 int mybot_bk7259_platform_prepare(void) {
     if (s_prepared) {

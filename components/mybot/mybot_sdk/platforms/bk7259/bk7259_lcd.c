@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bk7259_ops.h"
 #include "bk7259_expression.h"
+#include "bk7259_factory_reset.h"
 #include "bk7259_lcd.h"
 #include "bk7259_platform_log.h"
 #include "display/expression_policy.h"
@@ -78,6 +79,8 @@ typedef struct {
     bool accepting;
     bool sdk_attached;
     bool pending;
+    bool factory_reset_active;
+    bk7259_factory_reset_screen_t factory_reset_screen;
     /* State edges and one-shot requests are recorded before snapshots coalesce.
      * Only the UI owner submits faces and starts their display clocks. */
     bk7259_expression_policy_t expression_policy;
@@ -279,42 +282,48 @@ static void ui_worker(void *arg)
          * updates. The snapshot lock is never held during rendering/flush. */
         if (rtos_lock_mutex(&s_snapshot_lock) == BK_OK) {
             if (s_lcd.accepting) {
-                if (s_lcd.pending)
-                    mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid,
-                                           &s_lcd.runtime_status);
-                bk7259_expression_t expression;
-                bool replay;
-#if CONFIG_MYBOT_LVGL_UI_ANIMATIONS
-                const uint32_t transition_ms = BK7259_EXPRESSION_TRANSITION_MS;
-#else
-                const uint32_t transition_ms = 0;
-#endif
-                /* Timed changes run even when no SDK snapshot is pending. */
-                if (bk7259_expression_policy_select(&s_lcd.expression_policy,
-                                                    rtos_get_time(), transition_ms,
-                                                    &expression, &replay)) {
-                    int result = replay
-                        ? bk7259_lvgl_view_replay_expression(expression)
-                        : bk7259_lvgl_view_show_expression(expression);
-                    if (result < 0) {
-                        MYBOT_LOGW(TAG, "expression update rejected: %d", (int)expression);
-                    } else {
-                        bk7259_expression_source_t source = s_lcd.expression_policy.source;
-                        bk7259_expression_policy_displayed(&s_lcd.expression_policy,
-                                                           rtos_get_time());
-                        if (!s_lcd.expression_displayed || replay ||
-                            s_lcd.displayed_expression != expression ||
-                            s_lcd.displayed_source != source) {
-                            MYBOT_LOGI(TAG, "LCD expression -> %s source=%s",
-                                       bk7259_expression_name(expression),
-                                       bk7259_expression_source_name(source));
-                        }
-                        s_lcd.expression_displayed = true;
-                        s_lcd.displayed_expression = expression;
-                        s_lcd.displayed_source = source;
-                    }
-                } else {
+                if (s_lcd.factory_reset_active) {
+                    if (s_lcd.pending)
+                        bk7259_lvgl_view_show_factory_reset(s_lcd.factory_reset_screen);
                     s_lcd.expression_displayed = false;
+                } else {
+                    if (s_lcd.pending)
+                        mybot_lvgl_view_update(&s_lcd.latest, s_lcd.provisioning_ssid,
+                                               &s_lcd.runtime_status);
+                    bk7259_expression_t expression;
+                    bool replay;
+#if CONFIG_MYBOT_LVGL_UI_ANIMATIONS
+                    const uint32_t transition_ms = BK7259_EXPRESSION_TRANSITION_MS;
+#else
+                    const uint32_t transition_ms = 0;
+#endif
+                    /* Timed changes run even when no SDK snapshot is pending. */
+                    if (bk7259_expression_policy_select(&s_lcd.expression_policy,
+                                                        rtos_get_time(), transition_ms,
+                                                        &expression, &replay)) {
+                        int result = replay
+                            ? bk7259_lvgl_view_replay_expression(expression)
+                            : bk7259_lvgl_view_show_expression(expression);
+                        if (result < 0) {
+                            MYBOT_LOGW(TAG, "expression update rejected: %d", (int)expression);
+                        } else {
+                            bk7259_expression_source_t source = s_lcd.expression_policy.source;
+                            bk7259_expression_policy_displayed(&s_lcd.expression_policy,
+                                                               rtos_get_time());
+                            if (!s_lcd.expression_displayed || replay ||
+                                s_lcd.displayed_expression != expression ||
+                                s_lcd.displayed_source != source) {
+                                MYBOT_LOGI(TAG, "LCD expression -> %s source=%s",
+                                           bk7259_expression_name(expression),
+                                           bk7259_expression_source_name(source));
+                            }
+                            s_lcd.expression_displayed = true;
+                            s_lcd.displayed_expression = expression;
+                            s_lcd.displayed_source = source;
+                        }
+                    } else {
+                        s_lcd.expression_displayed = false;
+                    }
                 }
                 s_lcd.pending = false;
             }
@@ -651,6 +660,7 @@ int bk7259_lcd_prepare(void)
     s_lcd.runtime_status = (bk7259_lcd_runtime_status_t){.state = "stopped"};
     s_lcd.provisioning_ssid[0] = '\0';
     s_lcd.pending = false;
+    s_lcd.factory_reset_active = false;
     bk7259_expression_policy_init(&s_lcd.expression_policy);
     s_lcd.expression_displayed = false;
     s_lcd.accepting = true;
@@ -741,6 +751,11 @@ static int publish_content(const mybot_lcd_content_t *content)
     if (!s_lcd.accepting || aosl_atomic_read(&s_lcd.stopping)) {
         return -1;
     }
+    /* A product reset supersedes workflow transitions until reboot. SDK stop
+     * still gets a successful render result without replacing this override. */
+    if (s_lcd.factory_reset_active) {
+        return 0;
+    }
     bk7259_expression_t expression = BK7259_EXPRESSION_NEUTRAL;
     const bool in_conversation = content->screen == MYBOT_LCD_SCREEN_IN_CONVERSATION;
     const int emotion = in_conversation
@@ -765,11 +780,30 @@ static int publish_content(const mybot_lcd_content_t *content)
     return 0;
 }
 
-/* Caller holds the snapshot lock. Expressions never replace operating
- * instructions, and a queued request has no borrowed payload. */
+int bk7259_lcd_show_factory_reset(bk7259_factory_reset_screen_t screen)
+{
+    if (screen < BK7259_FACTORY_RESET_RESTORING || screen > BK7259_FACTORY_RESET_REBOOTING ||
+        !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
+        return -1;
+    }
+    int ret = -1;
+    if (s_lcd.prepared && s_lcd.accepting && !aosl_atomic_read(&s_lcd.stopping)) {
+        s_lcd.factory_reset_active = true;
+        bk7259_expression_policy_cancel(&s_lcd.expression_policy);
+        s_lcd.factory_reset_screen = screen;
+        s_lcd.pending = true;
+        notify(&s_lcd.wake);
+        ret = 0;
+    }
+    unlock(&s_snapshot_lock);
+    return ret;
+}
+
+/* Caller holds the snapshot lock. Expressions never replace operating or
+ * recovery instructions, and a queued request has no borrowed payload. */
 static bool can_show_expression(void)
 {
-    return s_lcd.prepared && s_lcd.accepting &&
+    return s_lcd.prepared && s_lcd.accepting && !s_lcd.factory_reset_active &&
            !aosl_atomic_read(&s_lcd.stopping) &&
            (s_lcd.latest.screen == MYBOT_LCD_SCREEN_READY ||
             s_lcd.latest.screen == MYBOT_LCD_SCREEN_IN_CONVERSATION);
@@ -834,8 +868,9 @@ int bk7259_lcd_set_runtime_status(const char *state, bool in_conversation)
     int ret = -1;
     if (s_lcd.prepared && s_lcd.accepting && !aosl_atomic_read(&s_lcd.stopping)) {
         ret = 0;
-        if (strcmp(s_lcd.runtime_status.state, state) != 0 ||
-            s_lcd.runtime_status.in_conversation != in_conversation) {
+        if (!s_lcd.factory_reset_active &&
+            (strcmp(s_lcd.runtime_status.state, state) != 0 ||
+             s_lcd.runtime_status.in_conversation != in_conversation)) {
             strcpy(s_lcd.runtime_status.state, state);
             s_lcd.runtime_status.in_conversation = in_conversation;
             s_lcd.pending = true;
@@ -851,7 +886,7 @@ void bk7259_lcd_set_provisioning_ssid(const char *ssid)
     if (!ssid || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
         return;
     }
-    if (s_lcd.accepting) {
+    if (s_lcd.accepting && !s_lcd.factory_reset_active) {
         size_t len = strnlen(ssid, sizeof(s_lcd.provisioning_ssid) - 1U);
         memcpy(s_lcd.provisioning_ssid, ssid, len);
         s_lcd.provisioning_ssid[len] = '\0';
@@ -868,7 +903,7 @@ static int lcd_sdk_init(void **out_context)
     }
     *out_context = NULL;
     int ret = -1;
-    if (s_lcd.prepared && s_lcd.accepting && !s_lcd.sdk_attached &&
+    if (s_lcd.prepared && s_lcd.accepting && !s_lcd.sdk_attached && !s_lcd.factory_reset_active &&
         !aosl_atomic_read(&s_lcd.stopping)) {
         s_lcd.sdk_attached = true;
         *out_context = &s_lcd;
@@ -894,8 +929,8 @@ static void lcd_sdk_destroy(void *context)
     if (context != &s_lcd || !s_snapshot_lock || rtos_lock_mutex(&s_snapshot_lock) != BK_OK) {
         return;
     }
-    /* Product UI remains alive for provisioning and lifecycle text. Retain the
-     * workflow, but never a request from the detached conversation. */
+    /* Product UI remains alive for provisioning, lifecycle text and reset.
+     * Retain workflow text, but never a request from the detached conversation. */
     s_lcd.sdk_attached = false;
     bk7259_expression_policy_cancel(&s_lcd.expression_policy);
     s_lcd.latest.indicators = MYBOT_LCD_INDICATOR_NONE;

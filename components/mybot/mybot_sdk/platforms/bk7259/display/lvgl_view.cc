@@ -55,6 +55,11 @@ constexpr Presentation kScreens[] = {
     {"启动失败", "请重启后重试", kError},
     {"正在退出", "正在结束服务", kMuted},
 };
+constexpr Presentation kResetScreens[] = {
+    {"正在恢复出厂设置", "请勿断电", kGreeting},
+    {"恢复失败，请重试", "请长按重试", kError},
+    {"恢复完成，正在重启", "请勿断电", kNeutral},
+};
 constexpr const char *kPortalNotice = "请连接设备热点\nhttp://192.168.4.1";
 #else
 constexpr Presentation kScreens[] = {
@@ -68,6 +73,11 @@ constexpr Presentation kScreens[] = {
     {"", "", kGreeting},
     {"Startup failed", "Restart to retry", kError},
     {"Stopping", "Closing services", kMuted},
+};
+constexpr Presentation kResetScreens[] = {
+    {"Restoring factory settings", "Keep power connected", kGreeting},
+    {"Reset failed", "Hold reset key to retry", kError},
+    {"Reset complete. Restarting", "Keep power connected", kNeutral},
 };
 constexpr const char *kPortalNotice = "Connect to device Wi-Fi\nhttp://192.168.4.1";
 #endif
@@ -103,6 +113,7 @@ struct View {
     bool has_content;
     bool face_visible;
     bool transitioning;
+    bool factory_reset;
     uint32_t transition_started;
     uint32_t current_ink;
     uint32_t current_terminal;
@@ -298,7 +309,7 @@ void render_expression(uint32_t now) {
 
 void update_timer() {
 #if CONFIG_MYBOT_LVGL_UI_ANIMATIONS
-    if (!s_view.face_visible) {
+    if (s_view.factory_reset || !s_view.face_visible) {
         lv_timer_pause(s_view.timer);
         return;
     }
@@ -533,7 +544,7 @@ int mybot_lvgl_view_create(lv_display_t *display) {
 
 void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid,
                             const bk7259_lcd_runtime_status_t *status) {
-    if (!s_view.root || !content ||
+    if (!s_view.root || !content || s_view.factory_reset ||
         content->screen < MYBOT_LCD_SCREEN_STARTING || content->screen >= MYBOT_LCD_SCREEN_COUNT) {
         return;
     }
@@ -600,7 +611,7 @@ void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *ssid
 }
 
 int bk7259_lvgl_view_show_expression(bk7259_expression_t expression) {
-    if (!s_view.root || !s_view.has_content ||
+    if (!s_view.root || !s_view.has_content || s_view.factory_reset ||
         (s_view.previous.screen != MYBOT_LCD_SCREEN_READY &&
          s_view.previous.screen != MYBOT_LCD_SCREEN_IN_CONVERSATION) ||
         expression < BK7259_EXPRESSION_NEUTRAL || expression >= BK7259_EXPRESSION_COUNT)
@@ -611,13 +622,24 @@ int bk7259_lvgl_view_show_expression(bk7259_expression_t expression) {
 }
 
 int bk7259_lvgl_view_replay_expression(bk7259_expression_t expression) {
-    if (!s_view.root || !s_view.has_content ||
+    if (!s_view.root || !s_view.has_content || s_view.factory_reset ||
         (s_view.previous.screen != MYBOT_LCD_SCREEN_READY &&
          s_view.previous.screen != MYBOT_LCD_SCREEN_IN_CONVERSATION) ||
         expression < BK7259_EXPRESSION_NEUTRAL || expression >= BK7259_EXPRESSION_COUNT)
         return -1;
     show_face(expression);
     return 0;
+}
+
+void bk7259_lvgl_view_show_factory_reset(bk7259_factory_reset_screen_t screen) {
+    if (!s_view.root || screen < BK7259_FACTORY_RESET_RESTORING ||
+        screen > BK7259_FACTORY_RESET_REBOOTING) {
+        return;
+    }
+    s_view.factory_reset = true;
+    show_guide(kResetScreens[screen]);
+    /* Recovery is product-owned; do not retain phase/VP text from its session. */
+    lv_label_set_text_static(s_view.terminal[2], "> state: factory_reset");
 }
 
 void mybot_lvgl_view_destroy(void) {

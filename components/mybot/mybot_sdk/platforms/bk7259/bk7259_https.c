@@ -157,17 +157,66 @@ static int resolve_host(ip_addr_t *address, const char *host, uint32_t start,
 
 static int wait_for_socket(mbedtls_net_context *net, uint32_t event, uint32_t start,
                            uint32_t timeout_ms) {
+    if (!net || net->fd < LWIP_SOCKET_OFFSET || net->fd >= LWIP_SELECT_MAXNFDS ||
+        (event != MBEDTLS_NET_POLL_READ && event != MBEDTLS_NET_POLL_WRITE)) {
+        return -1;
+    }
     int remaining_ms = deadline_remaining_ms(start, timeout_ms);
     if (remaining_ms <= 0) {
         return -1;
     }
 
-    int ret = mbedtls_net_poll(net, event, (uint32_t)remaining_ms);
-    if (ret < 0) {
-        log_tls_error("socket poll", ret);
-        return -1;
+    fd_set ready;
+    FD_ZERO(&ready);
+    FD_SET(net->fd, &ready);
+    struct timeval timeout = {
+        .tv_sec = remaining_ms / 1000,
+        .tv_usec = (remaining_ms % 1000) * 1000,
+    };
+    int ret = select(net->fd + 1,
+                     event == MBEDTLS_NET_POLL_READ ? &ready : NULL,
+                     event == MBEDTLS_NET_POLL_WRITE ? &ready : NULL,
+                     NULL, &timeout);
+    return ret > 0 && FD_ISSET(net->fd, &ready) ? 0 : -1;
+}
+
+/* The vendor socket errno is global. Read the connection's own SO_ERROR instead,
+ * so simultaneous control/background HTTPS requests cannot change this result. */
+static int socket_io_result(mbedtls_net_context *net, int result, int want,
+                            int failure) {
+    if (result >= 0) {
+        return result;
     }
-    return (ret & (int)event) != 0 ? 0 : -1;
+
+    int error = 0;
+    socklen_t error_len = sizeof(error);
+    if (getsockopt(net->fd, SOL_SOCKET, SO_ERROR, &error, &error_len) != 0) {
+        return failure;
+    }
+    if (error == 0 || error == EAGAIN || error == EINPROGRESS || error == EINTR) {
+        return want;
+    }
+    return error == EPIPE || error == ECONNRESET ? MBEDTLS_ERR_NET_CONN_RESET : failure;
+}
+
+static int socket_send(void *context, const unsigned char *data, size_t len) {
+    mbedtls_net_context *net = context;
+    if (!net || net->fd < 0 || (!data && len > 0) || len > INT_MAX) {
+        return MBEDTLS_ERR_NET_SEND_FAILED;
+    }
+    int ret = (int)send(net->fd, data, len, 0);
+    return socket_io_result(net, ret, MBEDTLS_ERR_SSL_WANT_WRITE,
+                             MBEDTLS_ERR_NET_SEND_FAILED);
+}
+
+static int socket_recv(void *context, unsigned char *data, size_t len) {
+    mbedtls_net_context *net = context;
+    if (!net || net->fd < 0 || (!data && len > 0) || len > INT_MAX) {
+        return MBEDTLS_ERR_NET_RECV_FAILED;
+    }
+    int ret = (int)recv(net->fd, data, len, 0);
+    return socket_io_result(net, ret, MBEDTLS_ERR_SSL_WANT_READ,
+                             MBEDTLS_ERR_NET_RECV_FAILED);
 }
 
 static int tcp_connect(mbedtls_net_context *net, const char *host, uint16_t port,
@@ -213,10 +262,6 @@ static int tcp_connect(mbedtls_net_context *net, const char *host, uint16_t port
     }
 
     int ret = connect(fd, (const struct sockaddr *)&storage, address_len);
-    if (ret < 0 && errno != EINPROGRESS && errno != EAGAIN) {
-        mbedtls_net_free(net);
-        return -1;
-    }
     if (ret < 0 &&
         wait_for_socket(net, MBEDTLS_NET_POLL_WRITE, start, timeout_ms) < 0) {
         mbedtls_net_free(net);
@@ -226,7 +271,8 @@ static int tcp_connect(mbedtls_net_context *net, const char *host, uint16_t port
     int socket_error = 0;
     socklen_t error_len = sizeof(socket_error);
     if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &error_len) != 0 ||
-        socket_error != 0) {
+        socket_error != 0 ||
+        getpeername(fd, (struct sockaddr *)&storage, &address_len) != 0) {
         mbedtls_net_free(net);
         return -1;
     }
@@ -349,8 +395,8 @@ static int https_connect(void **out_connection, const char *host, uint16_t port,
         goto fail;
     }
 
-    mbedtls_ssl_set_bio(&connection->ssl, &connection->net, mbedtls_net_send,
-                        mbedtls_net_recv, NULL);
+    mbedtls_ssl_set_bio(&connection->ssl, &connection->net, socket_send,
+                        socket_recv, NULL);
     if (tls_handshake(connection, start, timeout) < 0 ||
         mbedtls_ssl_get_verify_result(&connection->ssl) != 0) {
         goto fail;

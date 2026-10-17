@@ -3,6 +3,7 @@
 #define MYBOT_LVGL_VIEW_H_
 
 #include "bk7259_expression.h"
+#include "bk7259_factory_reset.h"
 #include "bk7259_lcd.h"
 #include "lvgl.h"
 #include <mybot/platform/mybot_lcd.h>
@@ -27,13 +28,16 @@ int mybot_lvgl_view_create(lv_display_t *display);
 void mybot_lvgl_view_update(const mybot_lcd_content_t *content, const char *provisioning_ssid,
                             const bk7259_lcd_runtime_status_t *status);
 /* Display-owner-only expression selection on READY/IN_CONVERSATION pages.
- * Guidance screens reject it. After update() enters a face page, this
+ * Guidance/reset screens reject it. After update() enters a face page, this
  * also reveals the requested face when the previous page was guidance.
  * Repeating the visible current ID preserves its animation clocks. */
 int bk7259_lvgl_view_show_expression(bk7259_expression_t expression);
 /* Display-owner-only one-shot command. Unlike show_expression(), this also
  * restarts the transition and animation clocks for the current expression. */
 int bk7259_lvgl_view_replay_expression(bk7259_expression_t expression);
+/* Product-owned override; the LCD snapshot owner keeps SDK updates from
+ * replacing it. Uses existing widgets/timer and borrows no external strings. */
+void bk7259_lvgl_view_show_factory_reset(bk7259_factory_reset_screen_t screen);
 void mybot_lvgl_view_destroy(void);
 
 #ifdef __cplusplus
