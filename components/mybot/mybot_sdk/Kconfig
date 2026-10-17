@@ -1,0 +1,264 @@
+menu "MyBot BK7259 platform"
+
+    config MYBOT_LVGL_UI_ANIMATIONS
+        bool "Animate pixel glasses and terminal cursor"
+        default y
+        depends on LVGL && LVGL_V9
+        help
+            Animate pixel-glasses expressions at up to 20 frames per second,
+            fade between faces in 250 ms, and blink the terminal cursor every
+            500 ms in the existing product-owned UI thread.
+
+    config MYBOT_LVGL_UI_LIGHT_THEME
+        bool "Legacy light theme setting"
+        default n
+        depends on LVGL && LVGL_V9
+        help
+            Retained for existing saved configurations. The pixel-glasses
+            renderer always uses its fixed process-gray skin.
+
+    config MYBOT_VIDEO
+        bool "Enable MyBot encoded video uplink"
+        default n
+        depends on ISP && MIPI_CSI && CSI_CAMERA && (CSI_GC2053 || CSI_CV2005) && BK_ENCODER
+        depends on MULTIMEDIA_DEVICE_SERVICE && MULTIMEDIA_H264_ENCODE
+        help
+            Capture the BK7259 MIPI CSI camera and upload complete H.264
+            access units through the MyBot RTC session.
+
+    config MYBOT_VIDEO_WIDTH
+        int "MyBot video width"
+        range 16 1280
+        default 640
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_HEIGHT
+        int "MyBot video height"
+        range 16 720
+        default 480
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_SENSOR_WIDTH
+        int "MyBot MIPI sensor width"
+        range 16 2000
+        default 1280
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_SENSOR_HEIGHT
+        int "MyBot MIPI sensor height"
+        range 16 1200
+        default 720
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_SENSOR_FPS
+        int "MyBot MIPI sensor frame rate"
+        range 1 60
+        default 5
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_MIN_BPS
+        int "MyBot minimum video bitrate"
+        range 1 10000000
+        default 256000
+        depends on MYBOT_VIDEO
+
+    config MYBOT_VIDEO_MAX_BPS
+        int "MyBot maximum video bitrate"
+        range 1 10000000
+        default 512000
+        depends on MYBOT_VIDEO
+
+    choice MYBOT_LANGUAGE
+        prompt "MyBot device language"
+        default MYBOT_LANGUAGE_ZH_CN
+        help
+            Select the language used by the device service, LCD and local
+            voice prompts. The endpoint and embedded prompt tag follow this
+            choice.
+
+        config MYBOT_LANGUAGE_ZH_CN
+            bool "Chinese"
+
+        config MYBOT_LANGUAGE_EN_US
+            bool "English"
+    endchoice
+
+    # Robot V2 wires four buttons as two resistor ladders, so a key is
+    # identified by its ADC channel and a voltage window rather than by a GPIO.
+    # The board's fifth button drives the SoC CEN pin and resets in hardware.
+
+    config MYBOT_KEY_ADC_CH1_CHAN
+        int "MyBot key ADC channel 1 (S2 and S3)"
+        range 0 15
+        default 15
+        help
+            SARADC channel of the first resistor ladder. Robot V2 routes it to
+            GPIO13 as ADC15. Both S2 and S3 are read on this channel and told
+            apart by their voltage windows. Must match the CONFIG_ADC_DEV_MAP
+            entry on the CP.
+
+    config MYBOT_KEY_ADC_CH2_CHAN
+        int "MyBot key ADC channel 2 (S4 and S5)"
+        range 0 15
+        default 4
+        help
+            SARADC channel of the second resistor ladder. Robot V2 routes it to
+            GPIO28 as ADC4. Must match the CONFIG_ADC_DEV_MAP entry on the CP.
+
+    config MYBOT_KEY_S2_MV_LOW
+        int "MyBot S2 voltage window lower bound (mV)"
+        range 0 65535
+        default 500
+
+    config MYBOT_KEY_S2_MV_HIGH
+        int "MyBot S2 voltage window upper bound (mV)"
+        range 0 65535
+        default 1500
+
+    config MYBOT_KEY_S3_MV_LOW
+        int "MyBot S3 voltage window lower bound (mV)"
+        range 0 65535
+        default 4500
+
+    config MYBOT_KEY_S3_MV_HIGH
+        int "MyBot S3 voltage window upper bound (mV)"
+        range 0 65535
+        default 6000
+
+    config MYBOT_KEY_S4_MV_LOW
+        int "MyBot S4 voltage window lower bound (mV)"
+        range 0 65535
+        default 500
+
+    config MYBOT_KEY_S4_MV_HIGH
+        int "MyBot S4 voltage window upper bound (mV)"
+        range 0 65535
+        default 1500
+
+    config MYBOT_KEY_S5_MV_LOW
+        int "MyBot S5 voltage window lower bound (mV)"
+        range 0 65535
+        default 4500
+
+    config MYBOT_KEY_S5_MV_HIGH
+        int "MyBot S5 voltage window upper bound (mV)"
+        range 0 65535
+        default 6000
+
+    # Voltage windows on one channel must not overlap: the driver rejects a
+    # window that intersects an already registered one with BK_ERR_PARAM.
+
+    choice MYBOT_KEY_S2_FUNCTION
+        prompt "MyBot S2 function"
+        default MYBOT_KEY_S2_CONVERSATION
+
+        config MYBOT_KEY_S2_NONE
+            bool "Unassigned"
+
+        config MYBOT_KEY_S2_CONVERSATION
+            bool "Conversation / provisioning"
+
+        config MYBOT_KEY_S2_VOLUME_UP
+            bool "Volume up"
+
+        config MYBOT_KEY_S2_VOLUME_DOWN
+            bool "Volume down"
+
+        config MYBOT_KEY_S2_FACTORY_RESET
+            bool "Factory reset"
+            help
+                Erases every persisted MyBot record (Wi-Fi credentials,
+                device credentials, volume) and reboots. Needs a long press,
+                so a single stray touch cannot wipe the device. The erase runs
+                only after the SDK has stopped.
+
+        config MYBOT_KEY_S2_RESERVED
+            bool "Reserved"
+    endchoice
+
+    choice MYBOT_KEY_S3_FUNCTION
+        prompt "MyBot S3 function"
+        default MYBOT_KEY_S3_FACTORY_RESET
+
+        config MYBOT_KEY_S3_NONE
+            bool "Unassigned"
+
+        config MYBOT_KEY_S3_CONVERSATION
+            bool "Conversation / provisioning"
+
+        config MYBOT_KEY_S3_VOLUME_UP
+            bool "Volume up"
+
+        config MYBOT_KEY_S3_VOLUME_DOWN
+            bool "Volume down"
+
+        config MYBOT_KEY_S3_FACTORY_RESET
+            bool "Factory reset"
+            help
+                Erases every persisted MyBot record (Wi-Fi credentials,
+                device credentials, volume) and reboots. Needs a long press,
+                so a single stray touch cannot wipe the device. The erase runs
+                only after the SDK has stopped.
+
+        config MYBOT_KEY_S3_RESERVED
+            bool "Reserved"
+    endchoice
+
+    choice MYBOT_KEY_S4_FUNCTION
+        prompt "MyBot S4 function"
+        default MYBOT_KEY_S4_VOLUME_DOWN
+
+        config MYBOT_KEY_S4_NONE
+            bool "Unassigned"
+
+        config MYBOT_KEY_S4_CONVERSATION
+            bool "Conversation / provisioning"
+
+        config MYBOT_KEY_S4_VOLUME_UP
+            bool "Volume up"
+
+        config MYBOT_KEY_S4_VOLUME_DOWN
+            bool "Volume down"
+
+        config MYBOT_KEY_S4_FACTORY_RESET
+            bool "Factory reset"
+            help
+                Erases every persisted MyBot record (Wi-Fi credentials,
+                device credentials, volume) and reboots. Needs a long press,
+                so a single stray touch cannot wipe the device. The erase runs
+                only after the SDK has stopped.
+
+        config MYBOT_KEY_S4_RESERVED
+            bool "Reserved"
+    endchoice
+
+    choice MYBOT_KEY_S5_FUNCTION
+        prompt "MyBot S5 function"
+        default MYBOT_KEY_S5_VOLUME_UP
+
+        config MYBOT_KEY_S5_NONE
+            bool "Unassigned"
+
+        config MYBOT_KEY_S5_CONVERSATION
+            bool "Conversation / provisioning"
+
+        config MYBOT_KEY_S5_VOLUME_UP
+            bool "Volume up"
+
+        config MYBOT_KEY_S5_VOLUME_DOWN
+            bool "Volume down"
+
+        config MYBOT_KEY_S5_FACTORY_RESET
+            bool "Factory reset"
+            help
+                Erases every persisted MyBot record (Wi-Fi credentials,
+                device credentials, volume) and reboots. Needs a long press,
+                so a single stray touch cannot wipe the device. The erase runs
+                only after the SDK has stopped.
+
+        config MYBOT_KEY_S5_RESERVED
+            bool "Reserved"
+
+    endchoice
+
+endmenu
