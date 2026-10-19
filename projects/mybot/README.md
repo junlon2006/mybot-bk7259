@@ -9,7 +9,9 @@ device-service control, bidirectional RTC audio, local provisioning and UI, and
 one-way encoded video uplink in one conversation.
 
 The SDK snapshot follows the latest committed upstream `main` revision
-`39d5ed122aab51d90c1c531298c4ead8dc35b104` (version 1.2.0).
+`58f0ef9c14be9f159b1dc167bf0f035983b25117` (tag `v1.3.0`, version 1.3.0).
+This refresh changes release metadata and source comments, preserving the previous
+platform interfaces, RTC and media behavior.
 The target retains its HTTPS-body logging patch.
 MCP control over RTM requires one `message.user` envelope, `data_type: "message"`,
 and string `content` containing DeviceCommand v1 `audio.set_volume` with an integer
