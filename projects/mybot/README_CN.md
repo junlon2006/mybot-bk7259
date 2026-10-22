@@ -1,154 +1,117 @@
 # MyBot 工程（BK7259）
 
 - [English](./README.md)
+- [仓库概览](../../README.zh-CN.md)
+- [验证状态](./UI_VALIDATION.zh-CN.md)
 
-## 1. 工程简介
+## 范围
 
-`mybot` 是 MyBot SDK 的 BK7259 AP/CP 双核固件集成工程，在同一次会话中提供设备服务控制、
-RTC 双向音频、本地配网与界面，以及单向编码视频上行。
+本目录保存 MyBot SDK 在 Robot V2 参考板上的 BK7259 产品集成，负责板级初始化、
+APSTA/STA 网络、本地外设、产品策略和 MyBot 生命周期边界。
 
-内嵌 SDK 同步上游 `main` 最新已提交快照
-`58f0ef9c14be9f159b1dc167bf0f035983b25117`（标签 `v1.3.0`，版本 1.3.0），
-保留 HTTPS body 日志补丁。本次同步仅更新发布版本及源码注释，平台接口、RTC 和媒体行为
-与上一快照一致。
-通过 RTM 进行 MCP 控制时，仅接受
-单层 `message.user` 信封，`data_type` 为 `message`，字符串 `content` 内包含
-DeviceCommand v1 的 `audio.set_volume`（`params.level` 为 0–100 的整数）或
-`audio.adjust_volume`（`params.delta` 为 -100–100 的整数）。正数增加音量，负数减少音量，
-0 保持不变，结果钳制到 0–100。发送方、频道、会话、代次校验及最近 16 个不同 command ID
-的 FIFO 去重保持生效，重复 ID 不会重复增减音量；裸命令、静音及情绪命令不再通过 RTM
-执行，`issued_at`/`expires_at` 仍可省略且忽略。
-绑定轮询/停止通知由后台服务队列执行，本地挂断先于HTTP通知完成。像素眼镜 UI 保留
-本地表情及声纹/服务端阶段处理，当前快照关闭云端 MCP 情绪入口。AVDK、音频、按键、
-视频、电源、GPIO及分区保留旧硬件配置。
+设备服务注册、鉴权、配对、会话状态、RTC/RTM 和声纹处理由 MyBot SDK 负责。
+云端服务和 AI Agent 属于外部依赖。
 
-## 2. AP 与 CP 职责
+## AP 与 CP
 
 | 核 | 职责 |
 | --- | --- |
-| AP（`bk7259_ap`） | 负责产品控制循环、APSTA 配网、MyBot SDK 与 AOSL 生命周期、HTTPS/RTC/RTM、音频、LCD、按键、摄像头采集、H.264 编码和视频上行。 |
 | CP（`bk7259`） | 初始化 BK 运行环境并启动 AP 系统。 |
+| AP（`bk7259_ap`） | 运行产品任务、网络、MyBot 生命周期、音频、显示、按键、摄像头和 H.264 编码。 |
 
-`bk7259` 工程目标会同时编译并打包两个核。
+`bk7259` 工程目标同时编译并打包两个核。
 
-## 3. 编译
+## 启动与网络所有权
 
-父仓库 gitlink 与 `vendor.lock.json` 固定 BK 官方依赖版本。在 `mybot-bk7259` 仓库根目录执行：
+AP 入口为 [ap_main.c](./ap/ap_main.c)：
 
-```bash
-python3 scripts/build_all.py
-```
+1. 初始化 BK 运行环境和媒体服务。
+2. 创建 `mybot_app` 产品任务。
+3. 从芯片 UID 派生设备 ID，构建运行时配置。
+4. 初始化 AOSL，并准备产品自有的显示和按键管理。
+5. 恢复待执行的恢复出厂操作、连接已保存 Wi-Fi，或进入 APSTA 配网。
+6. STA 获得 IPv4 后启动 MyBot。
+7. 轮询 SDK 状态并处理会话、配网和恢复出厂请求。
 
-脚本准备官方源码隔离副本，应用已记录的 DNS 和摄像头辅助补丁，再分别编译两种语言的
-AP/CP；不修改官方子模块 tracked 源码。使用 `--language zh-CN` 或 `--language en-US`
-可只编译一种语言；默认 clean，`--no-clean` 为增量构建。
+Wi-Fi 由产品层拥有。SDK 适配层只转发串行化后的连接状态。重新配网必须等待
+`mybot_stop()`，并确认 `STOPPED` 且 `mybot_is_running() == false` 后才能启动 APSTA。
 
-手工调用 `make` 时，先准备工作区，再执行工具打印的完整命令，包含其生成的 `SDK_DIR`：
+网络或 SDK 启动失败时，产品保留显示和按键，允许 S2 重新配网或 S3 恢复出厂。
 
-```bash
-python3 scripts/prepare_vendor.py --language zh-CN
-```
+## ADC 按键与恢复出厂
 
-发布的完整烧录镜像为：
+Robot V2 使用两条 ADC 电阻梯，按键由 ADC 通道和电压窗口共同识别：
+
+| 按键 | ADC | 电压窗口 | 短按 | 长按 |
+| --- | --- | ---: | --- | --- |
+| S1 | CEN | — | 硬件复位 | — |
+| S2 | 15 / GPIO13 | 500-1500 mV | 开始或结束会话 | 重新配网 |
+| S3 | 15 / GPIO13 | 4500-6000 mV | — | 恢复出厂 |
+| S4 | 4 / GPIO28 | 500-1500 mV | 音量减 | — |
+| S5 | 4 / GPIO28 | 4500-6000 mV | 音量加 | — |
+
+`CONFIG_ADC_KEY_LONG_PRESS_MS` 当前为 2000 ms。ADC 引脚保持高阻且不使用内部上拉，
+避免加载分压器。GPIO8 和 GPIO9 是 32.768 kHz 晶振引脚，保持高阻。
+
+恢复出厂由产品任务执行：
+
+1. 停止 MyBot 并确认进入 `STOPPED`。
+2. 停止配网门户、扫描和 STA。
+3. 删除并校验 `mybot.device_auth`、`mybot.wifi.v1` 和 `mybot.volume.v1`。
+4. 删除恢复标记并重启。
+
+恢复出厂不会清除无关 EasyFlash 记录，也不改变 UID 派生的设备 ID。中途断电时，下次启动
+会在网络或 SDK 启动前继续清理。清理失败时保留意图，等待用户再次长按 S3。
+
+## 音频
+
+MyBot 使用 16 kHz、单声道、有符号 16 位 PCM。Robot V2 采集路径使用双 DMIC 输入和
+片上硬件 AEC，播放使用板载 DAC。
+
+音量变化通过 SDK 设备音量适配层处理并保存到 EasyFlash。S5/S4 分别提供音量加/减。
+采集、播放、AEC 和反复会话循环仍需目标板验证。
+
+## 显示
+
+产品层从平台准备到关闭期间独占 JD9855 MIPI 屏，因此 MyBot 停止时配网页面仍然可见。
+原生 320x385 面板以 385x320 逻辑 RGB565 画面渲染。
+
+板级资源：
+
+- GPIO53：屏幕供电
+- GPIO5：屏幕复位
+- GPIO7：低有效背光
+
+LVGL 9.5.0 界面采用工艺灰和像素眼镜风格，包含四行终端文字，显示配网、配对、就绪、
+会话阶段、声纹、错误和恢复出厂状态，并支持中英文提示。
+
+界面为屏幕圆角保留保守安全区，实际硬件圆角半径尚未精确测量。GPU 和触摸关闭。
+资源来源见
+[display/SOURCES.md](../../components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)。
+
+## 视频
+
+默认 AP 配置启用视频，链路为：
 
 ```text
-releases/bk7259-zh-CN-video.bin
-releases/bk7259-en-US-video.bin
-```
-
-中间产物 `all-app.bin`、`app_pack.rbl` 与 `build_summary.txt` 位于
-`build/build-bk7259-<language>-video/solution/projects/mybot/build/bk7259/mybot/package/`。
-各核 ELF 位于对应生成工程下的 `build/bk7259/mybot/bk7259_ap/` 和
-`build/bk7259/mybot/bk7259/`。产品源码由父仓库维护，应在源目录修改，而不是修改生成副本。
-详见[官方依赖维护说明](../../docs/OFFICIAL_DEPENDENCIES.md)。
-
-## 4. 多模态视频上行
-
-AP 默认配置已开启 `CONFIG_MYBOT_VIDEO=y`。BK7259 视频链路为：
-
-```text
-MIPI CSI GC2053/CV2005 传感器（1280x720，5 fps）
-  -> ISP MP（640x480 NV12）
-  -> 硬件 FLEXA H.264 编码器
-  -> 编码帧池
+GC2053/CV2005 MIPI CSI，1280x720，5 fps
+  -> ISP MP 缩放为 640x480 NV12
+  -> 硬件 FLEXA H.264 编码
+  -> 完整 Annex-B access unit
   -> MyBot 视频处理器
-  -> Agora RTSA 主视频流
+  -> Agora RTC 上行
 ```
 
-当前参数与行为：
+码率范围为 256000-512000 bit/s，初始目标 384000 bit/s。视频仅在 RTC `CONNECTED`
+后启动，并在离开 RTC 前停止。设备不接收或显示远端视频。
 
-| 项目 | 当前值 |
-| --- | --- |
-| 编码输出 | H.264 Annex-B access unit，640x480 |
-| 传感器输入 | 1280x720，5 fps |
-| 码率范围 | 256000-512000 bit/s，初始中点为 384000 bit/s |
-| GOP | 30 帧；5 fps 下约 6 秒，RTSA 关键帧请求可强制生成 IDR |
-| 生命周期 | RTC 到达 `CONNECTED` 后才启动采集和编码；离开 RTC 前先停止 |
-| 方向 | 仅设备视频上行，远端视频订阅已关闭 |
-| RTSA 时序 | `frame_rate=0`，由 RTSA 使用真实帧时间戳，不按固定帧率合成时间戳 |
+配置和实现见 [defconfig](./ap/config/bk7259_ap/defconfig)与
+[bk7259_video.c](../../components/mybot/mybot_sdk/platforms/bk7259/bk7259_video.c)。
 
-RTSA 的带宽估算结果会被限制在配置的码率范围内，再应用到硬件编码器。音频保持双向，
-视频仅上行。
+## 验证
 
-视频配置位于：
+主机测试位于 [`tests/`](./tests/)。当前状态和剩余目标板检查见
+[UI_VALIDATION.zh-CN.md](./UI_VALIDATION.zh-CN.md)。
 
-- `components/mybot/mybot_sdk/Kconfig`
-- `projects/mybot/ap/config/bk7259_ap/defconfig`
-
-修改视频配置后应执行完整重新编译，避免生成配置保留旧值。
-
-## 5. 显示与表情
-
-JD9855保留320x385物理分辨率和385x320逻辑RGB565画面，GPIO53供电、GPIO5复位、GPIO7
-背光低有效。LVGL视图使用模拟器工艺灰皮肤与像素眼镜，四行终端文字显示表情、运行状态及
-会话阶段/声纹状态；启动、配网、网页控制台配对及错误保留中英文引导，恢复出厂增加恢复中、
-失败重试和重启提示，优先于 SDK 更新。S3 保留原 ADC 长按配置；恢复意图支持断电续做，只有
-SDK 与网络停止后才逐项删除并校验三条 MyBot 记录。网络或 SDK 启动失败仍可用 S2 重新配网、
-S3 恢复出厂，并保留 LCD 提示。
-图案等比缩放为346x302，位于(19,9)；终端文字9px、签名10px，四行保持独立行高。
-配对码固定为6位数字，使用固定32px字号。
-屏幕四角有明显圆弧，终端文字、配对码与眼镜主体须位于可见安全区；照片未提供精确硬件半径。
-旧浅色主题选项仅保留配置兼容，新像素渲染器固定使用工艺灰外观。
-
-| 运行状态 | 表情与时间 |
-| --- | --- |
-| READY / 挂断 | NEUTRAL |
-| 进入会话 | SURPRISED保持300 ms，另计进入过渡 |
-| LISTENING | LISTENING |
-| THINKING | THINKING；连续三秒后PROCESSING |
-| SPEAKING / 无阶段 | NEUTRAL |
-
-开启动画时，会话开场保持时间另加250 ms进入过渡。普通状态和声纹更新不重置开场保持
-计时；当前 SDK 快照关闭云端 MCP 情绪入口。开场到期恢复
-最新自动阶段，后台THINKING已持续三秒时恢复PROCESSING。离开会话清除计时，必要引导与
-恢复出厂优先。表情只控制LCD图案，不发送电机命令。
-
-全部23个表情名称如下：
-
-```text
-NEUTRAL, GREETING, HAPPY, EXCITED, CURIOUS, CONFUSED, THINKING, LISTENING,
-SURPRISED, SHY, PROUD, LOVE, SLEEPY, BORED, SAD, PLEADING, APOLOGY, WORRIED,
-ANNOYED, REFUSE, PROCESSING, ERROR, SLEEP
-```
-
-`include/bk7259_expression.h`提供名称转换及复制投递的本地接口
-`bk7259_lcd_set_expression()` / `bk7259_lcd_clear_expression()`。本地覆盖保持至清除或流程
-切换，重复同一本地覆盖不重播；清除后恢复最新自动表情。ERROR、SLEEP图案
-不改变实际运行状态。渲染、动画和到期处理均由现有显示owner执行，不新增UI线程或UTC依赖。
-
-## 6. 真机验收
-
-- [ ] 冷启动组合镜像 `all-app.bin`，确认 AP 和 CP 均正常启动。
-- [ ] 确认板上 GC2053 或 CV2005 摄像头识别成功，视频源报告 1280x720、5 fps，并输出 640x480 H.264。
-- [ ] 开启会话，确认双向音频正常，远端能收到 H.264 视频。
-- [ ] 确认摄像头采集和编码只在 RTC 连接后启动；会话拆除开始后不再发送视频帧。
-- [ ] 实测帧率约 5 fps、编码码率位于 256-512 kbit/s，初始目标为 384 kbit/s。
-- [ ] 确认周期 IDR 间隔约 6 秒，并验证 RTSA 关键帧请求会强制生成新的 IDR。
-- [ ] 在受限 Wi-Fi 下确认 RTSA 码率调整始终位于 256-512 kbit/s，且不会破坏音频通路。
-- [ ] 反复结束、重启和中断会话，确认编码器、帧池、摄像头及 RTC 资源均能正常停止并再次启动。
-- [ ] 在385x320逻辑屏验证全部23表情、四行文字、中英文及配对引导，确认终端文字、配对码与眼镜主体不被四个实体圆角遮挡。
-- [ ] 验证SURPRISED开场、阶段切换及THINKING连续三秒超时；挂断应恢复NEUTRAL。
-- [ ] 通过 `message.user` 信封验证 MCP `audio.set_volume` 的 0、50、100 音量；裸命令、静音及情绪命令应无效果。
-- [ ] 验证封装后的 `audio.adjust_volume` 正数、负数及 0，包含 -100、100 边界；结果应钳制到 0–100，重复 command ID 不应再次增减音量。
-- [ ] 验证本地表情设置/清除及重复覆盖，且无电机输出；重复阶段/声纹更新不重置会话开场计时。
-- [ ] 动画运行时回归原四个ADC按键、长按配网/恢复出厂及音视频功能。
+测试覆盖表情策略、HTTPS 传输、恢复出厂持久化、恢复所有权和 Wi-Fi/门户故障。
+主机测试不能验证 ADC 电压、DMIC/AEC 质量、显示时序、摄像头、掉电或长时间音视频运行。

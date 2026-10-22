@@ -6,504 +6,282 @@
 
 **简体中文 | [English](README.md)**
 
-**mybot-bk7259** 是开源 AI 多模态对话 SDK
-[mybot](https://github.com/junlon2006/mybot) 面向 BK7259 AP/CP 平台的参考实现。
-本仓库以 Git submodule 固定 BK 官方双核 SDK 和 AI 解决方案，BK7259 平台适配、双核固件工程
-和必要厂商补丁由父仓库维护，用于复现构建、平台开发和社区协作。
+`mybot-bk7259` 是 [MyBot SDK](https://github.com/junlon2006/mybot) 面向 Beken BK7259
+AP/CP 平台的参考固件集成。`main` 分支面向 Robot V2 参考板，提供板级初始化、网络所有权、
+外设适配、固件构建文件和本地产品策略；设备服务注册、鉴权、配对、会话状态、RTC/RTM 和
+声纹处理由 MyBot SDK 负责。
 
-> 本项目当前定位为 BK7259 参考实现，仍在持续开发中。用于量产产品前，请结合实际硬件
-> 完成板级适配、安全审查、稳定性验证，并确认所有第三方组件的许可与商业使用条件。
+本项目是参考实现，不是可直接量产的产品固件。部署前仍需完成板级适配、安全审查、
+目标硬件测试和第三方许可证审查。
 
-## 与上游 mybot 的关系
+## 功能
 
-[mybot](https://github.com/junlon2006/mybot) 是面向边缘设备的跨平台 AI 多模态对话 SDK。
-其核心采用 C99 编写，依赖 AOSL 提供可移植运行时，并通过平台 `ops` 接口获取 Wi-Fi、
-持久化存储、按键、显示、音频、视频和网络传输等设备能力。
+- BK7259 AP/CP 启动、Flash 分区以及 SRAM/PSRAM 布局。
+- 产品层负责的 STA 重连和带强制门户的 APSTA Wi-Fi 配网。
+- 双 DMIC 采集、片上硬件 AEC 和扬声器播放。
+- 可选 MIPI CSI 摄像头采集、硬件 H.264 编码和 Agora RTC 视频上行。
+- 电阻梯 ADC 按键、JD9855 MIPI 显示、EasyFlash 存储、HTTPS 和派生的设备身份。
+- 内嵌中英文提示音资源。
+- 统一构建入口，可生成中英文 AP/CP 镜像、组合烧录镜像和 OTA 包。
 
-本仓库不重新定义 mybot SDK，而是提供 BK7259 平台所需的完整实现：
+设备服务和云端 AI Agent 是外部依赖，不在本仓库范围内。
 
-- BK7259 AP/CP 双核启动、内存和 Flash 分区配置。
-- Wi-Fi APSTA 配网（含强制门户）、网络重连和凭据持久化。
-- 麦克风采集（片上硬件 AEC）、扬声器播放、音量控制和音频功耗管理。
-- MIPI 摄像头采集、ISP 图像处理、硬件 FLEXA H.264 编码和 RTC 视频上行。
-- 电阻梯按键、MIPI 显示、EasyFlash KV、HTTPS 和设备 UID 适配。
-- 基于 Agora RTSA 的全双工音频和 H.264 视频上行 AI 多模态会话。
-- 内嵌中英文 OGG 资源，用于配网提示音和配对码播报。
-- 包含 CP 与 AP 固件的完整烧录镜像和 OTA 包。
+## 架构
 
-设备服务、Agora RTC 云服务和云端 AI Agent 不在本仓库范围内。要跑通完整流程，
-需要一个兼容 mybot 协议的设备服务。
+| 组件 | 职责 |
+| --- | --- |
+| CP（`bk7259`） | 初始化 BK 运行环境并启动 AP 系统。 |
+| AP（`bk7259_ap`） | 运行产品控制循环、网络、MyBot 生命周期、音频、显示、按键、摄像头和 H.264 编码。 |
+| MyBot SDK | 负责设备服务注册、鉴权、配对、会话状态、RTC/RTM 和声纹处理。 |
+| BK7259 平台适配 | 使用 BK 组件和板级资源实现 MyBot 平台 `ops`。 |
+| AOSL | 为 MyBot 和 RTSA 提供可移植运行时。 |
 
-## 系统架构
+产品控制循环位于 [ap_main.c](projects/mybot/ap/ap_main.c)。它从芯片 UID 派生设备 ID，
+准备产品硬件，恢复或执行 Wi-Fi 配网，在 STA 获得 IPv4 后启动 MyBot，并负责恢复出厂和
+产品级恢复。
 
-```mermaid
-flowchart LR
-    user["User"] <--> device["BK7259 device"]
-    camera["MIPI CSI camera"] --> encoder["ISP MP<br/>HW FLEXA H.264"] --> platform
-    device --> platform["BK7259 platform port<br/>Wi-Fi · Audio · Video · Key · LCD · KV · HTTPS"]
-    platform --> core["mybot SDK<br/>Provisioning · Pairing · Session state machine"]
-    core <--> rtc["Agora RTC<br/>Audio + H.264 uplink"]
-    rtc <--> agent["Cloud AI agent<br/>ASR · Visual understanding · LLM · TTS"]
-```
-
-BK7259 固件采用 AP/CP 双核架构：
-
-- **CP** 负责基础系统初始化和 SMP 启动控制。
-- **AP** 初始化媒体服务并运行产品控制循环，承载平台适配、设备生命周期、网络、音频、
-  视频采集与编码、显示和 RTC 会话。
-- **控制循环**（[ap_main.c](projects/mybot/ap/ap_main.c)）根据已保存的
-  Wi-Fi 凭据选择 APSTA 配网还是正常 STA 模式；网络就绪后启动 mybot SDK，并负责重连、
-  重新配网、恢复出厂设置和 SDK 异常退出。
+BK 平台源码只通过 `<mybot/platform/...>` 公共平台头文件访问 MyBot，公开的 MyBot
+生命周期接口由 AP 应用入口统一管理。
 
 ## 仓库结构
 
-| 路径 | 职责 | 来源 / 固定版本 |
-| --- | --- | --- |
-| `bk_avdk_smp/` | BK 官方 AP/CP SDK 与平台基础组件 | `bekencorp/bk_avdk_smp`，`584b947920c414230f9909375f008e7d6a2c6c6b` |
-| `bk_solution_ai/` | BK 官方 AI 解决方案与共享媒体辅助组件 | `bekencorp/bk_solution_ai`，`03aadb49756a5109bfede04002b9b6820f407c3f` |
-| `projects/mybot/` | AP/CP 入口、板级配置、分区表和提示音资源 | 父仓库 |
-| `components/mybot/` | mybot 快照、AOSL、RTSA 与 BK7259 平台实现 | 父仓库 |
-| `patches/` | 强制门户 DNS 与 MyBot 摄像头辅助补丁 | 父仓库 |
-| `vendor.lock.json` | 官方仓库 URL、固定提交、补丁顺序及 SHA256 | 父仓库 |
-| `scripts/` | 源码校验、依赖准备、构建及构建工具测试 | 父仓库 |
-| `build/` | 生成的厂商工作区与各语言 AP/CP 构建目录 | 本地产物，Git 忽略 |
-| `releases/` | 构建成功后发布的完整烧录镜像 | 本地产物，Git 忽略 |
+| 路径 | 内容 |
+| --- | --- |
+| `bk_avdk_smp/` | 固定版本的 BK7259 AP/CP SDK 子模块 |
+| `bk_solution_ai/` | 固定版本的 BK Solution 子模块 |
+| `components/mybot/mybot_sdk/` | MyBot SDK 快照和 BK7259 平台适配 |
+| `components/mybot/mybot_aosl/` | 内嵌 AOSL 运行时 |
+| `components/mybot/mybot_rtsa/` | Agora RTSA 头文件、包信息和目标库 |
+| `projects/mybot/` | AP/CP 入口、板级配置、分区、资源和测试 |
+| `patches/` | 仅应用于生成构建副本的审核后厂商补丁 |
+| `scripts/` | 依赖准备、源码校验和构建工具 |
+| `docs/` | 依赖和验证文档 |
 
-两个子模块的 gitlink 固定到 BK 官方的确切提交，不依赖个人账号下的 BK fork。构建准备阶段
-校验版本，在隔离副本中应用补丁，官方检出目录的 tracked 源码保持干净。本次仅迁移 `main`，
-不修改 `r2`。[vendor.lock.json](vendor.lock.json) 记录审核后的版本和补丁摘要，`.gitmodules`
-提供官方克隆地址；子模块配置中的分支名不能代替 gitlink 固定的提交。目录、补丁范围和
-升级方式见[官方依赖维护说明](docs/OFFICIAL_DEPENDENCIES.md)。
+`build/`、`releases/` 等生成目录不会进入版本控制。本地参考资料不是构建输入。
 
-`components/mybot` 是一个组件容器，包含三个目录：
+## 固定依赖
 
-- `mybot_sdk` —— 内嵌的 mybot SDK 源码和 BK7259 平台操作（编译为 `mybot_sdk` 组件）。
-- `mybot_aosl` —— 内嵌的 AOSL 组件（`mybot_aosl`）。
-- `mybot_rtsa` —— 内嵌的 Agora RTSA SDK（`include/` 头文件与
-  `lib/arm/libagora-rtc-sdk.a`）。
+| 依赖 | 版本 |
+| --- | --- |
+| `bk_avdk_smp` | `584b947920c414230f9909375f008e7d6a2c6c6b` |
+| `bk_solution_ai` | `03aadb49756a5109bfede04002b9b6820f407c3f` |
+| MyBot SDK 快照 | `58f0ef9c14be9f159b1dc167bf0f035983b25117`，版本 1.3.0 |
+| AOSL 基线 | `84e086084ebcd0ae2455a0ce5721950c5fe2e656` |
+| Agora RTSA | v1.10.1 build `1278380` |
 
-父仓库内嵌的 mybot SDK 同步上游 `main` 最新已提交快照
-`58f0ef9c14be9f159b1dc167bf0f035983b25117`（标签 `v1.3.0`，SDK 版本 1.3.0）。
-本次同步更新发布版本及源码注释，平台接口、RTC 和媒体行为与上一快照一致。
-绑定轮询和停止通知由后台服务队列执行，本地RTC/媒体停止及状态更新先于停止会话的HTTP请求。
-该快照保留控制事件非阻塞投递、提示音代次跟踪、HTTP/JSON边界修复、视频控制串行化、
-RTC/RTM状态处理及日志门限修复。
+父仓库通过 `vendor.lock.json` 固定子模块 gitlink，通过 `SDK_REVISION` 和
+`AOSL_REVISION` 记录源码修改，并通过
+`components/mybot/mybot_rtsa/PACKAGE_INFO` 记录 RTSA 包。构建时在隔离副本中应用厂商补丁，
+不修改官方子模块 checkout。
 
-通过 RTM 进行 MCP 控制时，SDK 仅接受单层 `message.user` 信封：`data_type` 为
-`message`，字符串 `content` 内包含 DeviceCommand v1；支持 `audio.set_volume`，
-`params.level` 必须是 0–100 的整数，以及 `audio.adjust_volume`，`params.delta` 必须是
--100–100 的整数。正数增加音量，负数减少音量，0 保持不变，结果钳制到 0–100。
-SDK 校验发送方、频道、会话及代次，并按 FIFO 对最近 16 个不同 command ID 去重，
-重复 ID 不会重复增减音量。`issued_at` 及 `expires_at` 可省略或提供但均忽略，
-不依赖 UTC 时钟。音量命令复用已有音量适配；裸命令、
-`audio.set_mute` 及情绪命令不再通过 RTM 执行。像素眼镜 UI 保留本地表情及声纹/服务端
-阶段 bit 0-3 处理；当前 SDK 快照关闭云端 MCP 情绪入口。
-
-原有 BK7259 目标 patch 继续打印 HTTPS 请求与响应 body。
-`SDK_REVISION` 记录基准提交、已声明目标补丁及
-`include/`、`src/` 的确定性聚合摘要。AOSL 基线为 commit
-`84e086084ebcd0ae2455a0ce5721950c5fe2e656`，另有五处已记录的 BK7259 HAL 修改。构建过程不接受
-`MYBOT_SDK_DIR` 或外部 AOSL 源码路径。
+源码角色、补丁来源和更新规则见 [BK 依赖与厂商补丁](docs/OFFICIAL_DEPENDENCIES.zh-CN.md)。
 
 ## 环境要求
 
-- 支持 Git submodule 的 Git。
-- Linux 构建环境、Python 3.9 及以上版本，以及固定版本 `bk_avdk_smp` 所需的交叉编译工具链
-  和 Python 依赖，包括 `click_option_group`，安装方式见[BK SDK 环境说明](bk_avdk_smp/README_CN.md)。
-- 按 Robot V2 接线的 BK7259 开发板，或外设连接一致的兼容硬件。
-- 可访问兼容的 mybot 设备服务和有效的 Agora 服务配置。
-
-板级文档随子模块提供：解决方案与 AVDK 见 `bk_solution_ai/docs/bk7259/`，
-SDK 与烧录工具见 `bk_avdk_smp`。
+- 支持 Git submodule 的 Linux 环境。
+- Python 3.9 及以上版本，以及固定 `bk_avdk_smp` 所需的构建依赖，包括
+  `click_option_group`。
+- `bk_avdk_smp` 选择的 BK7259 Arm GNU 工具链。
+- 按 Robot V2 接线的 BK7259 开发板，或等价硬件。
+- 兼容的 MyBot 设备服务和已启用 Agora 服务的部署环境。
 
 ## 获取源码
-
-通过 HTTPS 克隆本仓库及其子模块：
 
 ```bash
 git clone --recurse-submodules https://github.com/junlon2006/mybot-bk7259.git
 cd mybot-bk7259
 ```
 
-如果顶层仓库已经克隆但未拉取子模块，执行：
+已有仓库可通过以下命令初始化子模块：
 
 ```bash
 git submodule sync --recursive
 git submodule update --init --recursive
-```
-
-克隆或更新后，查看固定版本，并校验依赖锁、补丁摘要、SDK/AOSL/RTSA 快照及产品源码边界：
-
-```bash
+git status
 git submodule status
+```
+
+正常开发使用父仓库固定的 gitlink，不要用 `git submodule update --remote` 跟踪移动分支。
+
+## 构建
+
+在仓库根目录执行：
+
+```bash
 python3 scripts/check_sources.py
-```
-
-GitHub 下载缓慢时，请保留 `.gitmodules` 中的规范 URL，仅把本地仓库作为命令级镜像：
-
-```bash
-git -c protocol.file.allow=always \
-    -c 'url.file:///path/to/bk_avdk_smp.insteadOf=https://github.com/bekencorp/bk_avdk_smp.git' \
-    -c 'url.file:///path/to/bk_solution_ai.insteadOf=https://github.com/bekencorp/bk_solution_ai.git' \
-    submodule update --init
-```
-
-该做法不会持久化本地路径，也不会修改对外发布的子模块 URL。
-
-## 构建固件
-
-在仓库根目录编译中英文固件：
-
-```bash
 python3 scripts/build_all.py
 ```
 
-脚本校验 `vendor.lock.json` 和官方子模块版本，生成已应用补丁的隔离厂商副本，再为各语言
-建立独立产品工程。当前已启用视频，产物分别是 `releases/bk7259-zh-CN-video.bin` 和
-`releases/bk7259-en-US-video.bin`。用 `--language zh-CN` 或 `--language en-US`
-可只编译一种语言；还支持 `--dry-run`、`--no-clean`、`--build-root` 和
-`--output-root`。脚本在独立工程副本中分别编译 AP/CP，保留源工程配置，并在所选版本
-都成功后再发布固件。构建脚本本身不联网获取依赖。
+`check_sources.py` 校验子模块版本和已跟踪文件状态、补丁摘要、MyBot/AOSL 内容摘要、
+RTSA 文件摘要以及产品源码边界。`build_all.py` 准备隔离厂商工作区，为每种语言编译两个核，
+校验生成配置和服务地址，并在全部请求的变体成功后发布产物。
 
-使用默认构建根目录时，已打补丁的官方源码位于 `build/_vendor/<digest>/`，各语言工程位于
-`build/build-bk7259-<language>-video/solution/projects/mybot/`。产品改动应修改源目录
-`projects/mybot/` 和 `components/mybot/`，厂商修复应维护在 `patches/`；准备阶段会从源目录
-刷新产品副本。`--dry-run` 仅校验版本与补丁摘要、打印命令，不创建构建目录；`--no-clean`
-复用编译对象，依赖锁变化后会选择新的厂商工作区并使对应工程缓存失效。
+常用选项：
 
-当前官方依赖布局已通过源码检查、构建工具宿主测试和中英文 AP/CP 编译；迁移后的老硬件
-实机回归仍待完成，见[本次验证记录](docs/OFFICIAL_DEPENDENCIES.md#2026-10-17-迁移验证)。
+```bash
+python3 scripts/build_all.py --language zh-CN
+python3 scripts/build_all.py --language en-US
+python3 scripts/build_all.py --dry-run
+python3 scripts/build_all.py --no-clean
+```
 
-需要手工使用厂商 `make` 时，先准备对应语言的工作区：
+固定版本的 RTSA 包只支持 `MYBOT_AUDIO_PTIME_MS=60`。
+
+### 构建产物
+
+默认输出为：
+
+```text
+releases/bk7259-zh-CN-video.bin
+releases/bk7259-en-US-video.bin
+```
+
+中文构建的生成产物位于：
+
+```text
+build/build-bk7259-zh-CN-video/solution/projects/mybot/build/bk7259/mybot/package/
+```
+
+| 文件 | 用途 |
+| --- | --- |
+| `all-app.bin` | 包含 bootloader、CP 和 AP 的组合烧录镜像 |
+| `app_pack.rbl` | 包含 CP 和 AP 镜像的 OTA 包 |
+| `build_summary.txt` | Flash 和 RAM 使用报告 |
+
+独立 CP 和 AP 镜像位于同一生成构建目录下的 `bk7259/app.bin` 和
+`bk7259_ap/app.bin`。
+
+直接调用厂商构建时，先生成对应语言的工程：
 
 ```bash
 python3 scripts/prepare_vendor.py --language zh-CN
 ```
 
-再执行该工具打印的 `make` 命令，其中包含正确的生成工程路径和已打补丁的 `SDK_DIR`。
-源目录 `projects/mybot/Makefile` 要求显式传入 `SDK_DIR`；使用准备工具打印的命令，确保构建
-消费的是已准备的依赖。目录见[依赖维护说明](docs/OFFICIAL_DEPENDENCIES.md)。
+随后执行工具打印的完整 `make` 命令。不要在未经补丁准备的厂商目录中直接构建源工程。
 
-当前内嵌 BK7259 RTSA v1.10.1 构建 `1278380` 仅支持 **60 ms** 音频包长。
-保持 `MYBOT_AUDIO_PTIME_MS` 未设置或为 `60`，当前 CMake 会拒绝 `20` 和 `40`。
-其他包长需要匹配的 RTSA 包，并审核更新其头文件、库摘要和构建集成。
+## 烧录与使用
 
-使用默认构建根目录时，各语言的中间产物位于
-`build/build-bk7259-<language>-video/solution/projects/mybot/build/bk7259/mybot/package/`：
+使用 Beken 烧录工具写入 `all-app.bin`；具体步骤见 `bk_avdk_smp` 随附的烧录文档。
 
-| 文件 | 用途 |
-| --- | --- |
-| `all-app.bin` | 包含 bootloader、CP 与 AP 固件的完整烧录镜像 |
-| `app_pack.rbl` | 包含 CP 与 AP 固件的 OTA 包 |
-| `build_summary.txt` | Flash、SRAM、IRAM、DTCM 和 PSRAM 占用报告 |
+典型流程：
 
-CP 与 AP 的独立镜像位于对应生成工程下的 `build/bk7259/mybot/bk7259/app.bin` 和
-`build/bk7259/mybot/bk7259_ap/app.bin`。
+1. 没有有效 Wi-Fi 凭据时，设备启动开放热点 `mybot-xxxx`。
+2. 连接热点并打开 `http://192.168.4.1/`，提交目标网络凭据。
+3. STA 获得 IPv4 后，配网门户停止，MyBot 启动。
+4. 未绑定设备显示并播报配对码。
+5. 使用配置的对话键开始或结束一次多模态会话。
 
-## 烧录与运行
+Robot V2 使用两条 ADC 电阻梯。按键由 ADC 通道和电压窗口共同识别：
 
-使用 Beken 烧录工具把 `all-app.bin` 写入设备，具体步骤参考目标开发板说明和随
-`bk_avdk_smp` 提供的 Beken 烧录文档。
-发布到 `releases/bk7259-<language>-video.bin` 的文件就是对应语言完整 `all-app.bin` 的副本，
-使用相同的烧录流程。
+| 按键 | ADC | 电压窗口 | 功能 |
+| --- | --- | ---: | --- |
+| S1 | CEN | — | 硬件复位 |
+| S2 | ADC15 / GPIO13 | 500-1500 mV | 短按开始/结束会话；长按重新配网 |
+| S3 | ADC15 / GPIO13 | 4500-6000 mV | 长按恢复出厂 |
+| S4 | ADC4 / GPIO28 | 500-1500 mV | 音量减 |
+| S5 | ADC4 / GPIO28 | 4500-6000 mV | 音量加 |
 
-参考设备的运行流程为：
-
-1. 首次上电或没有有效 Wi-Fi 凭据时，设备进入 APSTA 配网模式，创建开放的
-   `mybot-xxxx` SoftAP。
-2. 连接该 SoftAP 并打开 `http://192.168.4.1/`，选择目标网络并提交凭据。配置页面也会
-   自动弹出，无需手动输入地址，详见 [Wi-Fi 配网](#wi-fi-配网)。
-3. STA 链路获取到 IPv4 地址后，门户和 SoftAP 停止，设备启动 mybot SDK 完成注册、配对
-   和鉴权。
-4. 未绑定的设备会显示并播报配对码；绑定完成后，用对话按键发起带全双工音频和摄像头
-   视频上行的 AI 多模态对话。
-
-参考板共有五个按键，其中一个直接接硬件复位，另外四个构成两条电阻梯并接到 ADC 引脚，
-因此按键由「ADC 通道 + 电压窗口」而不是 GPIO 标识：
-
-| 按键 | ADC | 窗口 (mV) | 短按 | 长按（约 2 秒） |
-| --- | --- | --- | --- | --- |
-| S1 | — | — | 硬件 `CEN` 复位，固件不可见 | — |
-| S2 | 15 (GPIO13) | 500–1500 | 开始 / 结束对话 | 重新进入配网模式 |
-| S3 | 15 (GPIO13) | 4500–6000 | — | 恢复出厂设置并重启 |
-| S4 | 4 (GPIO28) | 500–1500 | 音量减 | — |
-| S5 | 4 (GPIO28) | 4500–6000 | 音量加 | — |
-
-GPIO 分配以及显示、音频和摄像头外设连接属于板级配置。移植到不同的 BK7259 硬件需要做
-相应的配置和平台改动。
+`CONFIG_ADC_KEY_LONG_PRESS_MS` 当前为 2000 ms。分压值不同的板型应根据日志中的通道和
+毫伏值校准 `MYBOT_KEY_S*_MV_*`。
 
 ## 配置
 
-主要工程配置文件：
+主要配置文件：
 
-- AP：`projects/mybot/ap/config/bk7259_ap/defconfig`
-- CP：`projects/mybot/cp/config/bk7259/defconfig`
-- Flash 分区：`projects/mybot/partitions/bk7259/auto_partitions.csv`
-- SRAM/PSRAM 布局：`projects/mybot/partitions/bk7259/ram_regions.csv`
+| 文件 | 用途 |
+| --- | --- |
+| `projects/mybot/ap/config/bk7259_ap/defconfig` | AP 功能、语言、按键、显示、音频和视频 |
+| `projects/mybot/cp/config/bk7259/defconfig` | CP 功能 |
+| `projects/mybot/partitions/bk7259/auto_partitions.csv` | Flash 布局 |
+| `projects/mybot/partitions/bk7259/ram_regions.csv` | SRAM/PSRAM 布局 |
 
-`MyBot BK7259 platform` Kconfig 菜单提供：
+AP 主要选项：
 
-- `CONFIG_MYBOT_LANGUAGE_ZH_CN`：中文服务区域、LCD 文案与提示音资源。
-- `CONFIG_MYBOT_LANGUAGE_EN_US`：英文服务区域、LCD 文案与提示音资源。
-- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`：像素眼镜及切换动画，默认启用。
-- `CONFIG_MYBOT_LVGL_UI_LIGHT_THEME`：保留旧配置兼容，新像素渲染器固定使用工艺灰皮肤。
-- `CONFIG_MYBOT_VIDEO`：启用编码视频上行，参考固件中已设为 `y`。
-- `CONFIG_MYBOT_VIDEO_WIDTH` / `CONFIG_MYBOT_VIDEO_HEIGHT`：ISP 编码输出，参考值为
-  `640x480`。
-- `CONFIG_MYBOT_VIDEO_SENSOR_WIDTH` / `CONFIG_MYBOT_VIDEO_SENSOR_HEIGHT` /
-  `CONFIG_MYBOT_VIDEO_SENSOR_FPS`：MIPI sensor 输入，参考值为 `1280x720@5fps`。
-- `CONFIG_MYBOT_VIDEO_MIN_BPS` / `CONFIG_MYBOT_VIDEO_MAX_BPS`：H.264 码率范围，参考值为
-  `256000` 到 `512000` bit/s。
-- 每个按键的 ADC 通道、电压窗口上下界和对应功能。
+- `CONFIG_MYBOT_LANGUAGE_ZH_CN` 或 `CONFIG_MYBOT_LANGUAGE_EN_US`：选择界面文本、提示音、
+  服务地址和单地区 TLS 根证书。
+- `CONFIG_MYBOT_VIDEO`：启用摄像头采集和 H.264 视频上行。
+- `CONFIG_MYBOT_LVGL_UI_ANIMATIONS`：启用表情过渡和光标动画。
+- `MYBOT_KEY_S*` 设置按键 ADC 通道、电压窗口和功能。
 
-语言选项同时决定 LCD 文案、服务区域和提示音资源目录：中文
-（`https://botstation.shengwang.cn/api`）或英文（`https://botstation.agora.io/api`）。
-两个语言选项必须且只能启用一个。
+默认服务地址：
 
-语言选项同时选择唯一内嵌的 HTTPS 根证书：国内版使用 DigiCert Global Root G2，
-海外版使用 Go Daddy Root Certificate Authority - G2。每次连接只解析所选的一张证书，
-减少证书存储和每连接堆内存开销；继续强制校验证书链和主机名。
-
-HTTPS 使用自有 socket BIO、`select()`、每连接 `SO_ERROR` 和 TCP 对端确认，避免并发请求
-通过 lwIP 共享 `errno` 误判错误。连接、发送、接收继续使用有界超时；此修改改善错误隔离，
-不保证缩短 TLS 握手耗时。
-
-设备身份不由配置决定：[ap_main.c](projects/mybot/ap/ap_main.c) 在运行时
-读取由 CP 提供的芯片唯一 UID，使用 HMAC-SHA256 和 `mybot-bk7259-device-id-v1` 派生密钥，
-取摘要前 12 字节并转换为大写十六进制，格式为 `BK7259-<24位大写十六进制>`。固件版本上报 SDK 自身的
-`MYBOT_VERSION_STRING`，硬件型号固定为 `mybot-bk7259`，两者在启动时打印。UID 无法读取的
-设备没有身份，会打印失败日志并拒绝启动。请勿把生产环境服务凭据提交到仓库。
-
-## 按键
-
-按键采用电阻梯的原因就是「通道 + 电压窗口」的标识方式：同一通道上的两个按键只能靠
-产生的毫伏值区分。同一通道的两个窗口不得重叠，驱动会拒绝重叠注册；默认值对应
-Robot V2。`CONFIG_ADC_KEY_LONG_PRESS_MS` 决定长按判定时间，当前为 `2000`，即上文所说的
-「约 2 秒」。
-
-音量键上报 `MYBOT_KEY_EVENT_VOLUME_UP` / `MYBOT_KEY_EVENT_VOLUME_DOWN`，SDK 将其转发到
-`mybot_media_pipeline_adjust_volume()`，平台音量适配层负责持久化结果。这两个事件只在
-SDK 运行时投递。
-
-S3 长按只提交恢复请求。产品任务先持久化恢复意图，再确认 SDK 完全停止以及门户、扫描、
-STA 均已停止，随后逐项删除并校验 `mybot.device_auth`、`mybot.wifi.v1`、`mybot.volume.v1`，
-保留其他 EasyFlash 记录；最后清除恢复意图并重启进入配网。中途断电时，下次启动会在联网
-和 SDK 启动前继续恢复。意图记录无效或恢复失败时显示重试画面，等待再次长按 S3，不会
-误报成功并重启。长按阈值及四个 ADC 按键映射保持不变。
-
-扫描、连接、门户 HTTP 处理和保存凭据期间均检查恢复请求；扫描、STA、SoftAP 停止失败时
-保留所有权以便重试。网络或 SDK 启动失败后保留 LCD 和按键：S2 长按仍可独立重新配网，
-保留设备凭据和音量；S3 长按可恢复出厂。只有 SDK 已到 `STOPPED` 且
-`mybot_is_running()` 为 false，才允许启动 APSTA。
-
-[usr_gpio_cfg.h](projects/mybot/ap/config/bk7259_ap/usr_gpio_cfg.h)
-设置对应的上电引脚状态。ADC 引脚保持高阻、不上拉，因为内部上拉会加载分压器、使测量
-到的毫伏值偏移。该文件同时固定了 GPIO8/GPIO9，它们是 32.768 kHz 晶振
-（`P8/32K_XO`、`P9/32K_XI`），不是按键。
-
-## 显示
-
-产品层从平台准备到平台关闭全程独占一块 JD9855 MIPI 屏，因此在 mybot SDK 停止期间配网
-界面依然可见。物理分辨率为 320x385，按 385x320 的逻辑 RGB565 画面渲染。GPIO53 控制屏
-供电，GPIO5 为复位，GPIO7 背光低有效。
-屏幕四角有明显圆弧，布局为终端文字、配对码及眼镜主体保留保守安全区，避免被实体圆角遮挡；
-未将照片估计值作为精确硬件圆角半径。
-
-LVGL 9.5.0渲染器以模拟器的 `process`（工艺灰）皮肤与 `geek`（像素眼镜）替换旧状态卡片，
-适配本板385x320逻辑屏。固定 `#050708` 黑色玻璃底、米白中性镜框与灰色装饰保持RGB565
-画面一致；四行终端文字显示当前表情与真实运行状态，会话中显示服务端阶段及声纹注册状态。
-图案等比缩放至346x302，终端文字9px、签名10px；配对码固定为6位数字，使用固定32px字号。
-启动、配网、网页控制台配对和错误保留中英文引导；恢复出厂增加恢复中、失败重试和重启提示，
-优先于 SDK 状态与表情。GPU和触摸关闭，不显示
-摄像头预览。
-
-READY显示NEUTRAL；进入会话后SURPRISED保持300 ms，并另计进入过渡。随后LISTENING显示
-聆听，THINKING连续三秒后转PROCESSING，SPEAKING或无阶段时显示NEUTRAL。开启动画时，
-会话开场另加250 ms进入过渡；到期恢复最新阶段表情，挂断回中性待机。当前 SDK 快照关闭
-云端 MCP 情绪入口。全部23个表情及本地显示接口仍可使用，见
-[工程说明](projects/mybot/README_CN.md#5-显示与表情)。
-
-SDK 的 render 调用将内容复制到一个保存最新状态的 mailbox，并唤醒 `mybot_ui` 任务。
-只有该任务更新运行中的视图、执行 LVGL timer 和刷屏；来不及处理的中间状态可以合并为
-最新状态。SDK 的 LCD init/destroy 只做产品自有显示的挂接与解挂，所以 SDK 停止后，UI
-任务仍可显示 APSTA 配网页面。跨线程状态与显示完成状态使用 BK7259 的 AOSL 原子接口。
-
-LVGL 生成原生 RGB565 条带，BK7259 后端将变化区域旋转写入空闲整帧缓冲，并从上一帧保留
-未变化像素，再通过 DSI bus、panel 和 DPU 接口提交。已提交的缓冲必须等 DPU 完成回调
-归还所有权后才能复用。关闭时等待 UI 任务与显示回调退出；关闭失败时保留资源，供后续重试。
-
-显示内存预算与音视频流水线分开：
-
-| 分配项 | 大小 | 内存区域 |
-| --- | --- | --- |
-| 两块 320x385 RGB565 扫描缓冲 | 2 x 246400 = 492800 字节 | 非缓存媒体 frame slab |
-| 一块 385x16 RGB565 绘制条带 | 12320 字节 | HSRAM |
-| UI 任务栈 | 8192 字节 | HSRAM |
-| LVGL 临时绘制层 | 单层优选 16 KiB；总量上限 64 KiB | HSRAM |
-| LVGL 对象、样式、绘制任务与 RTOS 控制对象 | 额外动态分配，峰值需目标机测量 | HSRAM / RTOS 堆 |
-
-`projects/mybot/ap/lv_conf_custom.h` 选择 `LV_USE_OS=LV_OS_NONE`、单软件绘制单元，
-并用 HSRAM 分配 LVGL 内部对象。64 KiB 只限制绘制层，不是 UI 总内存上限。
-构建结果、宿主测试和待上板检查项见
-[UI_VALIDATION.md](projects/mybot/UI_VALIDATION.md)。
-像素表情由固定LVGL控件、采样曲线和小型蒙版绘制。终端字体与固定中文子集覆盖产品引导；
-任意中文SSID或聊天内容需要扩充字库。资源来源与许可证记录在
-[display/SOURCES.md](components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)。
-
-## 视频上行
-
-当前 AP 构建提供只上行的 H.264 链路：`1280x720` MIPI CSI sensor 以 `5` fps 运行，ISP MP
-生成 `640x480` NV12 帧，硬件 FLEXA H.264 编码器通过 Agora RTSA 主视频流发送完整 access
-unit。设备不接收或渲染远端视频，音频链路仍为全双工。
-
-启动 mybot 时只初始化视频 context，摄像头和编码器保持关闭；RTC 报告会话已连接后才给相机
-上电并启动编码。结束对话时，在离开 RTC 前依次停止视频 worker、编码器、摄像头和相机电源；
-完整 SDK 关闭流程也会再次执行 stop/destroy 作为兜底。RTSA 的带宽估计回调会更新编码器目标
-码率，并钳制在 `256000` 到 `512000` bit/s，初始目标为 `384000` bit/s；RTSA 关键帧请求会
-强制生成 IDR。
-
-视频帧将 RTSA `frame_rate` 元数据设为 `0`，让 RTSA 使用真实发送时间戳，而不是引入第二个
-名义帧率。Solution codec helper 当前使用 30 帧 GOP，因此在 5 fps 下周期性 IDR 间隔约为
-6 秒；RTSA 关键帧请求可以提前生成 IDR。
-
-## Wi-Fi 配网
-
-Wi-Fi 由产品层独立于 mybot SDK 生命周期持有。启动时固件从 EasyFlash 读取一条带版本的
-凭据记录：优先尝试已保存的网络；未配网设备或已保存网络拿不到 IPv4 地址时，进入
-[烧录与运行](#烧录与运行) 中描述的 APSTA 门户流程。
-
-SoftAP 通过 DHCP 只下发 `192.168.4.1` 作为解析器，并对所有 DNS 查询都回该地址，因此
-手机加入网络后发起的连通性探测（`captive.apple.com`、`generate_204` 等）会落到门户上
-而不是解析失败；门户对这些路径返回指向自身的重定向，这就是配置页面无需手动输入地址
-即可弹出的原因。DNS 部分通过 `patches/bk_avdk_smp/0001-captive-portal-dns.patch` 提供，
-重定向在产品门户侧。普通 AP
-不受影响，因为改写只在 SoftAP 自身的 DNS 服务启用时生效。
-
-长按已配置的对话键约两秒可请求重新配网。按键回调只投递请求，应用会等 `mybot_stop()`
-完成后再启动 APSTA。配网成功且 STA 拿到 IPv4 后，应用重新启动 mybot。因此配网与 mybot
-永远不会并发运行。
-
-## 内嵌语音资源
-
-提示音资源以 16 kHz 单声道 Opus-in-Ogg 文件存放在
-`projects/mybot/assets/locales/`，每种语言一个子目录。它们被编译成只读
-C 数组写入 AP 固件，无需 SD 卡，也不占用单独的 `assets_data` 分区。解码后的 PCM 缓冲
-在运行时从 PSRAM 分配。
-
-修改或新增 OGG 文件后，必须在构建前手动重新生成 C 数组：
-
-```bash
-python3 projects/mybot/scripts/generate_assets_c.py \
-  projects/mybot/assets \
-  components/mybot/mybot_sdk/platforms/bk7259/bk7259_assets.c
+```text
+https://botstation.shengwang.cn/api   # zh-CN
+https://botstation.agora.io/api       # en-US
 ```
 
-生成脚本只收集 `locales/**/*.ogg`。音频格式与更新流程见
-[`projects/mybot/assets/README.md`](projects/mybot/assets/README.md)，
-由 PCM 生成 Ogg 可参考 `projects/mybot/scripts/convert_pcm_to_ogg.sh`。
+JD9855 和 Robot V2 的详细硬件配置见工程说明。
 
-## 源码边界
+## 测试与验证
 
-- 内嵌的 mybot SDK `include/`、`src/` 以记录的上游提交为基线，包含 `SDK_REVISION` 明示的
-  BK7259 HTTPS body 日志补丁；`platforms/` 是 BK7259 平台适配源码。
-- 内嵌的 AOSL 锁定在记录的版本，包括已声明的五处 BK7259 HAL 修改。
-- 两个 BK 子模块均固定官方源码，tracked 内容不包含产品修改。构建时只在生成的隔离副本中
-  应用双核强制门户 DNS 补丁及 Solution 摄像头辅助补丁；音频、视频、配网和显示集成继续
-  使用固定版本的公开组件 API。
-- BK 平台适配使用公开的 `<mybot/platform/...>` 头文件；现有按键适配额外通过公开的
-  `<mybot/mybot.h>` 调用 `mybot_get_state()`，仅用于读取状态。
-- `projects/mybot/ap/ap_main.c` 是公开 `<mybot/mybot.h>` API 的唯一应用生命周期使用者，
-  也是唯一包含公开头 `<mybot/mybot_version.h>` 的产品源码。
-- RTSA 静态库按常规方式链接，绝不使用 `--whole-archive`。
-- AVDK 的 `agora-iot-sdk` 组件保持关闭，其较旧的 RTSA 和 AOSL 不属于本固件。
-
-## 子模块版本管理
-
-普通使用者应保持顶层仓库固定的版本：
+源码和主机侧检查：
 
 ```bash
-git pull --ff-only
-git submodule sync --recursive
-git submodule update --init --recursive
 python3 scripts/check_sources.py
+for script in projects/mybot/tests/*/run.sh; do
+  bash "$script"
+done
+(cd scripts && python3 -m unittest test_build_all.py test_vendor_workspace.py)
 ```
 
-不要使用 `git submodule update --remote` 跟随未经审核的分支头。维护者升级时应同步修改
-gitlink、`vendor.lock.json` 的官方提交、补丁及其 SHA256，重新编译中英文并完成板级回归，
-详见[依赖维护说明](docs/OFFICIAL_DEPENDENCIES.md)。
-不要提交生成的厂商副本、`build/`、`__pycache__/` 或固件产物。
+当前主机测试覆盖构建准备、表情策略、HTTPS 超时和 socket 错误、恢复出厂持久化、
+恢复所有权以及 Wi-Fi/门户故障。主机测试不能替代目标硬件验证。
 
-## 当前开发限制
+量产前至少完成：
 
-- 最小 APSTA 使用本地开放 SoftAP 和明文 HTTP。量产部署仍需确定持有性证明或等效的
-  入网安全方案。
-- EasyFlash 凭据存储可用，但静态加密仍需产品安全决策。
-- 目标 RTSA 头文件区分 RTC 与 RTM token，在宣称端到端 RTM 前需确认设备服务 token
-  在两者中都被接受。
-- 最小描述符中已启用硬件音量和本地提示音。音量持久化在 EasyFlash，提示音资源以
-  Ogg/Opus 内嵌在 `projects/mybot/assets/`；唤醒词仍关闭。
-- 编码视频链路已配置为 5 fps，但持续出帧节奏、码率自适应、关键帧/GOP 行为和重复会话
-  start/stop 仍需在目标摄像头硬件上完成运行时验证。
-- LVGL UI 仍需在目标机验证屏幕方向与颜色、中英文显示、反复停止 SDK/配网/启动，以及
-  同时运行音视频时的 HSRAM 和栈峰值。
-- ADC 按键窗口是厂商 Robot V2 默认值，仅在 Robot V2 板子上验证过。每次按下都会打印
-  通道、实测毫伏值和匹配到的窗口；若换成分压值不同的板型，可据此校准
-  `MYBOT_KEY_S*_MV_*`。
-- S3 恢复出厂设置具有破坏性，且无法从设备侧撤销。
+- 冷启动和反复启动、停止 MyBot。
+- Robot V2 ADC 按键检测及长按功能。
+- Wi-Fi 配网、取消、重连和掉电恢复。
+- 双 DMIC 采集、硬件 AEC、音量和 RTC 双向音频。
+- 摄像头采集、H.264 输出、帧率、码率调整、IDR 和重复视频会话。
+- JD9855 方向、颜色、圆角安全区和中英文界面。
+- 音频、视频、界面、HTTP 和 RTC 并发时测量栈、堆、PSRAM 和时序余量。
+- 实际服务的证书链、主机名、有效期和超时。
+
+当前限制：
+
+- 配网 SoftAP 为开放热点，本地设置页面使用 HTTP。
+- Wi-Fi 和设备凭据保存在 EasyFlash 中，没有静态加密。
+- 目标头文件区分 RTC 和 RTM token，在声明端到端 RTM 互通前需确认服务契约。
+- 视频和 UI 运行期资源峰值仍需目标测量。
+- 发布固件前必须解决第三方组件的再分发条款。
+
+当前检查和发布阻塞项见 [验证状态](projects/mybot/UI_VALIDATION.zh-CN.md)。
 
 ## 文档
 
 - [BK7259 MyBot 工程说明](projects/mybot/README_CN.md)
-- [BK 官方依赖与补丁说明](docs/OFFICIAL_DEPENDENCIES.md)
-- [mybot 项目](https://github.com/junlon2006/mybot)
-- [mybot 英文文档](https://github.com/junlon2006/mybot/blob/main/README.md)
-- [mybot 移植指南](https://github.com/junlon2006/mybot/blob/main/docs/PORTING.md)
-- [mybot 嵌入式集成指南](https://github.com/junlon2006/mybot/blob/main/docs/EMBEDDED.md)
+- [BK 依赖与厂商补丁](docs/OFFICIAL_DEPENDENCIES.zh-CN.md)
+- [MyBot SDK](https://github.com/junlon2006/mybot)
+- [MyBot 移植指南](https://github.com/junlon2006/mybot/blob/main/docs/PORTING.zh-CN.md)
+- [MyBot 嵌入式集成指南](https://github.com/junlon2006/mybot/blob/main/docs/EMBEDDED.zh-CN.md)
 - [BK7259 SDK 与解决方案文档](bk_solution_ai/docs/bk7259/)
 
 ## 贡献
 
-欢迎提交 Issue 和 Pull Request：
-
-- 与平台无关的 SDK 功能和公开 API 改动，请提交到
-  [上游 mybot 项目](https://github.com/junlon2006/mybot)。
-- BK7259 平台、固件及产品补丁改动提交到本仓库。通用厂商修复可提交到
-  [BK AVDK](https://github.com/bekencorp/bk_avdk_smp) 或
-  [BK Solution](https://github.com/bekencorp/bk_solution_ai)，采用官方修复时再更新本仓库审核后的
-  版本锁和补丁。
-- 集成、构建和文档问题请提交到
-  [mybot-bk7259 Issues](https://github.com/junlon2006/mybot-bk7259/issues)。
-
-请保持每个改动聚焦，说明所用硬件、配置和验证方式，不要提交构建产物。
+- 平台无关的 SDK 功能和公开 API 修改提交到上游 MyBot 项目。
+- BK7259 板级、适配层、工程和构建修改提交到本仓库。
+- 厂商修改必须保留在受版本锁约束的补丁集中。
+- 每次提交需说明所用硬件、配置和实际完成的验证。
+- 不要提交构建产物、本地参考资料、凭据或 token。
 
 ## 许可证与第三方依赖
 
-项目原创内容采用 [Apache License 2.0](LICENSE) 许可，文件自身或配套声明另有说明的除外。
-产品文件和内嵌依赖迁入父仓库，不改变其原有许可。
+本顶层仓库的原创内容采用 [Apache License 2.0](LICENSE)。该许可证不覆盖子模块、内嵌源码
+快照、字体、音频资源或预编译二进制。
 
-两个子模块、内嵌快照及第三方组件分别受各自许可证和使用条款约束，包括但不限于：
+具有独立或附加条款的组件包括：
 
-- [bk_avdk_smp 许可证](bk_avdk_smp/LICENSE)
-- [bk_solution_ai 许可证](bk_solution_ai/LICENSE)
+- [BK AVDK 许可证](bk_avdk_smp/LICENSE)
+- [BK Solution 许可证](bk_solution_ai/LICENSE)
 - [AOSL 许可证及附加条款](components/mybot/mybot_aosl/aosl/LICENSE)
-- [提示音资源许可证](projects/mybot/assets/LICENSE.xiaozhi-esp32)
 - [LVGL 许可证](bk_avdk_smp/ap/components/lvgl/LICENCE.txt)
-- [LVGL 视图、字体和表情来源](components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)
+- [显示和字体来源](components/mybot/mybot_sdk/platforms/bk7259/display/SOURCES.md)
 - [BK7259 第三方声明](components/mybot/mybot_sdk/THIRD_PARTY_NOTICES.md)
-- [mybot 第三方声明](https://github.com/junlon2006/mybot/blob/main/THIRD_PARTY_NOTICES.md)
+- [MyBot 第三方声明](https://github.com/junlon2006/mybot/blob/main/THIRD_PARTY_NOTICES.md)
 
-AOSL 许可证在 Apache-2.0 之外还包含附加条款，因此本项目不得被描述为整体采用
-Apache-2.0 许可。
+AOSL 在 Apache-2.0 之外还有附加条件，因此组合工程不能整体描述为仅采用 Apache-2.0。
 
-Agora RTSA 二进制属于专有构建输入，上游 mybot SDK 不再分发。本仓库将其内嵌在
-`components/mybot/mybot_rtsa`，为已验证的 BK7259 包 RTSA v1.10.1
-构建 `1278380`，包名记录在其 `PACKAGE_INFO` 中，并由 `mybot_sdk/CMakeLists.txt` 固定
-头文件与库的摘要：
-
-```text
-header   SHA256 29b1c21cbe416ee703eaa197ce623469619b1ed68cd3e9c66cb3abe2fafec7db
-library  SHA256 40e8f93d9077eefe888e37b42ca0ddb5c7b2b6256b2f00cb7ba7c11c5551cb0f
-```
-
-Agora RTSA 等预编译二进制可能受试用期、再分发限制和商业许可约束。在用于产品或分发
-固件之前，请自行确认并遵守所有适用条款。
+仓库在 `components/mybot/mybot_rtsa/` 中包含 Agora RTSA v1.10.1 build `1278380`
+输入。当前仓库中没有该包的独立再分发授权；发布二进制或包含它的固件前，必须取得所需的
+书面授权。
