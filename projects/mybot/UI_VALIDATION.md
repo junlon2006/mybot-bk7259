@@ -61,25 +61,22 @@ python3 scripts/build_all.py
 ```
 
 It builds Chinese and English AP/CP images and verifies the generated service
-endpoint. The documentation update did not rerun the firmware build, so this page
-does not claim a new build-size or timing measurement.
+endpoint. The SDK synchronization rebuilt both language variants successfully;
+target timing and resource high-water measurements remain required.
 
 ## Release Blockers
 
 These items require code or contract changes:
 
-1. **Credential logging:** the pinned MyBot HTTPS debug patch logs complete request
-   and response bodies at `NOTICE`. Responses may contain device, pairing, or RTC
-   tokens. Remove or redact this logging before production.
-2. **Certificate dates:** the adapter requests certificate and hostname
+1. **Certificate dates:** the adapter requests certificate and hostname
    verification, but the active MbedTLS configuration does not enable
    `MBEDTLS_HAVE_TIME_DATE`. Certificate expiry and not-before checks must be
    restored and tested.
-3. **Credential storage:** Wi-Fi and device credentials are stored in EasyFlash
+2. **Credential storage:** Wi-Fi and device credentials are stored in EasyFlash
    without at-rest encryption.
-4. **RTSA distribution:** the repository contains the proprietary RTSA input, but
+3. **RTSA distribution:** the repository contains the proprietary RTSA input, but
    no standalone redistribution grant is recorded.
-5. **Target measurements:** firmware Flash, OTA size, PSRAM peaks, and stack high-water
+4. **Target measurements:** firmware Flash, OTA size, PSRAM peaks, and stack high-water
    marks must be re-measured after the final code and asset set is selected.
 
 ## Target Board Checks
